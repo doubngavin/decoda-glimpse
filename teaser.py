@@ -35,18 +35,62 @@ OPEN = {
  "G":"your sense of direction shifts with your environment, so the wrong room can quietly pull you off course",
 }
 
+# what each Moon sign actually needs emotionally
+MOON = {
+ "Aries":"you need momentum and a clean, direct outlet for feeling",
+ "Taurus":"you settle through comfort, touch and a steady, unhurried pace",
+ "Gemini":"you process feeling by talking and naming it, not by sitting in it",
+ "Cancer":"you feel everything deeply and need a safe base to retreat to",
+ "Leo":"you need warmth, recognition and to feel genuinely wanted",
+ "Virgo":"you steady yourself by being useful and putting things in order",
+ "Libra":"you need harmony and another person to think alongside",
+ "Scorpio":"you feel in extremes and need depth, privacy and full honesty",
+ "Sagittarius":"you need room, freedom and a sense that more is possible",
+ "Capricorn":"you self-soothe through control, competence and quiet achievement",
+ "Aquarius":"you need space and tend to observe your own feelings from a step back",
+ "Pisces":"you absorb the emotional weather around you and need time alone to clear it",
+}
+# the pull each dominant element creates
+DRIVE = {
+ "Wood":"to grow, push outward and keep starting new things",
+ "Fire":"to express, be seen and turn energy into something visible",
+ "Earth":"to stabilise, take care of people and make things solid and usable",
+ "Metal":"to refine, hold a standard and bring order to mess",
+ "Water":"to go inward, reflect and understand before you act",
+}
+_SUN_ELEM = {
+ "Aries":"fire","Leo":"fire","Sagittarius":"fire",
+ "Gemini":"air","Libra":"air","Aquarius":"air",
+ "Taurus":"earth","Virgo":"earth","Capricorn":"earth",
+ "Cancer":"water","Scorpio":"water","Pisces":"water",
+}
+_OUTWARD_WEST = {"fire","air"}
+_OUTWARD_EAST = {"Wood","Fire"}
+
 def make_teaser(chart):
     a, b, h = chart["astro"], chart["bazi"], chart["hd"]
     sun_line = SUN.get(a["sun"], "a distinct way of seeing")
+    moon_line = MOON.get(a["moon"], "you have your own way of handling feeling")
     elem = b["dominant"]
     elem_line = ELEM.get(elem, "")
-    dm = b["day_master_element"]
+    drive = DRIVE.get(elem, "to move in your own direction")
 
-    core = (f"Three systems, read together, keep pointing at the same core. "
-            f"Your Sun in {a['sun']} gives you {sun_line}. In the Chinese system your "
-            f"chart leans heavily toward {elem} ({elem_line}), with a {b['day_master']} core. "
-            f"And in Human Design you are a {h['type']}. Put together: this is someone wired "
-            f"to take in, process, and put something back out into the world.")
+    # honest agreement/tension read between two systems (the brand's moat, in miniature)
+    west_out = _SUN_ELEM.get(a["sun"]) in _OUTWARD_WEST
+    east_out = elem in _OUTWARD_EAST
+    if west_out == east_out:
+        bridge = f"These two pull the same way, so the drive {drive} runs strong and is hard to ignore."
+    elif west_out:  # Western chart outward, Chinese element inward
+        bridge = (f"Here the two disagree: your Western chart pushes you outward and visible, while your "
+                  f"{elem} core pulls the other way, {drive}. That split is not a flaw, it is where most of your range lives.")
+    else:  # Chinese element outward, Western chart inward
+        bridge = (f"Here the two disagree: your {elem} core pushes you {drive}, while your Western chart "
+                  f"pulls you toward something quieter and more inward. That split is not a flaw, it is where most of your range lives.")
+
+    core = (f"Your Sun in {a['sun']} gives you {sun_line}, and your {a['moon']} Moon means "
+            f"{moon_line}. In the Chinese system your chart leans toward {elem} ({elem_line}), "
+            f"built on a {b['day_master']} core, which pulls you {drive}. In Human Design "
+            f"you are a {h['type']}. {bridge}")
 
     strength = TYPE.get(h["type"], "")
     decision = AUTH.get(h["authority"], "")
