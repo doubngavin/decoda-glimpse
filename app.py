@@ -14,7 +14,7 @@ import teaser
 app = FastAPI(title="Decoda Glimpse")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten to https://trydecoda.com before launch
+    allow_origins=["https://trydecoda.com", "https://www.trydecoda.com"],
     allow_methods=["*"], allow_headers=["*"],
 )
 
