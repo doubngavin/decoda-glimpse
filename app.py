@@ -27,19 +27,60 @@ class GlimpseReq(BaseModel):
     email: str | None = None
 
 
+class CityNotFound(Exception):
+    """The geocoder answered, but knows no such place."""
+
+
+class GeocoderUnavailable(Exception):
+    """The geocoder could not be reached or refused the request."""
+
+
 def geocode(city: str):
-    """Free OpenStreetMap geocoding. Returns (lat, lon, display_name)."""
-    r = requests.get(
-        "https://nominatim.openstreetmap.org/search",
-        params={"q": city, "format": "json", "limit": 1},
-        headers={"User-Agent": "Decoda/1.0 (decode yourself)"},
-        timeout=10,
+    """Geocode a "City, Country" string. Returns (lat, lon, display_name).
+
+    Uses Open-Meteo's geocoding API: free, no API key, and explicitly usable
+    from a server. Nominatim was used before and silently failed for every
+    request, because it blocks generic user agents and cloud provider IPs.
+    """
+    q = (city or "").strip()
+    if not q:
+        raise CityNotFound("empty city")
+
+    # Open-Meteo matches on the place name only, so send the first segment as
+    # the name and keep the remaining segments to pick the right match.
+    parts = [p.strip() for p in q.split(",") if p.strip()]
+    name = parts[0]
+    hints = [p.lower() for p in parts[1:]]
+
+    try:
+        r = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": name, "count": 10, "language": "en", "format": "json"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except Exception as exc:                      # network, 4xx/5xx, bad JSON
+        raise GeocoderUnavailable(str(exc)) from exc
+
+    results = data.get("results") or []
+    if not results:
+        raise CityNotFound(q)
+
+    best = results[0]
+    if hints:
+        for item in results:
+            haystack = " ".join(
+                str(item.get(k, "")) for k in ("country", "country_code", "admin1", "admin2")
+            ).lower()
+            if any(h in haystack for h in hints):
+                best = item
+                break
+
+    label = ", ".join(
+        x for x in (best.get("name"), best.get("admin1"), best.get("country")) if x
     )
-    r.raise_for_status()
-    data = r.json()
-    if not data:
-        raise ValueError("city not found")
-    return float(data[0]["lat"]), float(data[0]["lon"]), data[0]["display_name"]
+    return float(best["latitude"]), float(best["longitude"]), label
 
 
 def tz_offset(lat, lon, dt):
@@ -67,8 +108,18 @@ def glimpse(req: GlimpseReq):
         raise HTTPException(400, "date must be YYYY-MM-DD and time HH:MM")
     try:
         lat, lon, place = geocode(req.city)
-    except Exception:
-        raise HTTPException(400, "could not find that birth city, try 'City, Country'")
+    except CityNotFound:
+        # The user can fix this one.
+        raise HTTPException(
+            400,
+            "We could not find that birth city. Try \"City, Country\", for example \"Lyon, France\".",
+        )
+    except GeocoderUnavailable:
+        # Not the user's fault: never report a service outage as a bad city.
+        raise HTTPException(
+            503,
+            "The location service is temporarily unavailable. Please try again in a moment.",
+        )
     dt = datetime(d.year, d.month, d.day, t.hour, t.minute)
     tz = tz_offset(lat, lon, dt)
     chart = engine.compute(d.year, d.month, d.day, t.hour, t.minute, lat, lon, tz)
