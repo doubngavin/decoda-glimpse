@@ -265,3 +265,17 @@ def approve_send(oid: str, sig: str = Form("")):
     except Exception as e:
         result = f"error: {e}"
     return _PAGE.format(f"<h2>{result}</h2>")
+
+
+@app.get("/health/portrait")
+def health_portrait():
+    """Can this host render PDFs and is the pipeline configured? No secrets shown."""
+    out = {k: bool(os.environ.get(k)) for k in ("ANTHROPIC_API_KEY", "RESEND_API_KEY", "APPROVE_SECRET")}
+    try:
+        from weasyprint import HTML
+        HTML(string="<p>ok</p>").write_pdf()
+        out["weasyprint"] = True
+    except Exception as e:
+        out["weasyprint"] = f"no: {str(e)[:200]}"
+    out["model"] = portrait.MODEL
+    return out
