@@ -116,7 +116,7 @@ def _parse(text, usage=None):
     t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t)
     a, b = t.find("{"), t.rfind("}")
     try:
-        return json.loads(t[a:b + 1])
+        return json.loads(t[a:b + 1], strict=False)
     except Exception as e:
         raise ModelOutputError(f"bad JSON ({e}); stop_reason={(usage or {}).get('stop_reason')}; "
                                f"len={len(t)}; head={t[:200]!r}; tail={t[-200:]!r}")
