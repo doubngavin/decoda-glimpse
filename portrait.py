@@ -91,7 +91,7 @@ def _parse(text):
 
 def _chart_payload(chart, tl, order):
     c = {k: chart[k] for k in ("astro", "bazi", "hd") if k in chart}
-    c["meta"] = {"name": order["name"], "birth_time_confidence": order.get("birth_time_confidence", "exact")}
+    c["meta"] = {"first_name": order["name"].split()[0], "birth_time_confidence": order.get("birth_time_confidence", "exact")}
     if tl:
         c["timeline"] = {
             "age_now": tl["age"],
@@ -248,7 +248,19 @@ Decoda · trydecoda.com
 
 # ---------------------------------------------------------------- pipeline
 
+def _purge(days=90):
+    cut = time.time() - days * 86400
+    for f in os.listdir(DATA_DIR):
+        p = os.path.join(DATA_DIR, f)
+        try:
+            if os.path.getmtime(p) < cut:
+                os.remove(p)
+        except OSError:
+            pass
+
+
 def new_order(req):
+    _purge()
     oid = secrets.token_urlsafe(12)
     rec = {"id": oid, "status": "queued", "created": datetime.utcnow().isoformat(), "req": req}
     save(oid, rec)
