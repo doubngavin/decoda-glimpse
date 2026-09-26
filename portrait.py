@@ -69,16 +69,34 @@ class ModelOutputError(Exception):
     pass
 
 
-def _call(messages, max_tokens=20000):
+# Newer models think by default and can spend the whole budget thinking (seen
+# 26/09: 20000 thinking tokens, zero text). Try the cheapest variant first; a
+# variant the API rejects (400) costs nothing, so fall through to the next.
+_THINKING_VARIANTS = [
+    {"thinking": {"type": "disabled"}},
+    {"thinking": {"type": "enabled", "budget_tokens": 2048}},
+    {},
+]
+_VARIANT = {"i": 0}
+
+
+def _call(messages, max_tokens=16000):
     key = os.environ["ANTHROPIC_API_KEY"]
-    r = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={"x-api-key": key, "anthropic-version": "2023-06-01",
-                 "content-type": "application/json"},
-        json={"model": MODEL, "max_tokens": max_tokens, "system": SYSTEM,
-              "messages": messages},
-        timeout=900,
-    )
+    last = None
+    for i in range(_VARIANT["i"], len(_THINKING_VARIANTS)):
+        body = {"model": MODEL, "max_tokens": max_tokens, "system": SYSTEM,
+                "messages": messages, **_THINKING_VARIANTS[i]}
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"},
+            json=body, timeout=900,
+        )
+        if r.status_code == 400 and i < len(_THINKING_VARIANTS) - 1:
+            last = r.text[:300]
+            continue
+        _VARIANT["i"] = i          # remember what works for the next call
+        break
     if r.status_code >= 400:
         raise ModelOutputError(f"API {r.status_code}: {r.text[:500]}")
     data = r.json()
@@ -87,6 +105,7 @@ def _call(messages, max_tokens=20000):
     usage = data.get("usage", {})
     usage["stop_reason"] = data.get("stop_reason")
     usage["block_types"] = [b.get("type") for b in blocks]
+    usage["variant"] = _VARIANT["i"]
     if not text.strip():
         raise ModelOutputError(f"empty text; stop_reason={data.get('stop_reason')} blocks={usage['block_types']} usage={data.get('usage')}")
     return text, usage
