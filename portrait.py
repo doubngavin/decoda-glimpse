@@ -55,7 +55,7 @@ TWO CLOCKS (two_clocks, 450-600 words): describe Judith Herman's three phases of
 
 ACTUAL LIFE (actual_life): only if the request includes life events. Place each event the reader gave at its age, and relate it only to cycles that had ALREADY happened by then (from the timeline JSON). Do not project forward. If there are no life events, actual_life is null.
 
-OUTPUT: a single JSON object, no prose before or after, with exactly these keys:
+OUTPUT: call the write_portrait tool exactly once, with exactly these fields:
 archetype (2-4 words), essence (1-2 sentences), trust_block (string or null), core_statement (one sentence, max 22 words),
 core_body, lens_astro, lens_bazi, lens_hd, connect, work, protocols: arrays of {"title","body","mech"},
 convergence, divergence, shadow, two_clocks: {"lead": string, "items": [{"title","body","mech"}]},
@@ -67,6 +67,36 @@ Paragraphs inside a body are separated by \\n\\n. Plain text, no markdown."""
 
 class ModelOutputError(Exception):
     pass
+
+
+_BLOCK = {"type": "object", "properties": {"title": {"type": "string"}, "body": {"type": "string"},
+          "mech": {"type": "string"}}, "required": ["title", "body", "mech"]}
+_BLOCKS = {"type": "array", "items": _BLOCK}
+_SECTION = {"type": "object", "properties": {"lead": {"type": "string"}, "items": _BLOCKS},
+            "required": ["lead", "items"]}
+TOOL = {
+    "name": "write_portrait",
+    "description": "Submit the full Decoda Self portrait content.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "archetype": {"type": "string"}, "essence": {"type": "string"},
+            "trust_block": {"type": ["string", "null"]}, "core_statement": {"type": "string"},
+            "core_body": _BLOCKS, "lens_astro": _BLOCKS, "lens_bazi": _BLOCKS, "lens_hd": _BLOCKS,
+            "convergence": _SECTION, "divergence": _SECTION, "shadow": _SECTION,
+            "strengths": {"type": "object", "properties": {"lead": {"type": "string"},
+                          "items": {"type": "array", "items": {"type": "string"}}},
+                          "required": ["lead", "items"]},
+            "connect": _BLOCKS, "work": _BLOCKS, "protocols": _BLOCKS,
+            "two_clocks": _SECTION,
+            "actual_life": {"anyOf": [_SECTION, {"type": "null"}]},
+            "closing": {"type": "string"},
+        },
+        "required": ["archetype", "essence", "core_statement", "core_body", "lens_astro", "lens_bazi",
+                     "lens_hd", "convergence", "divergence", "shadow", "strengths", "connect", "work",
+                     "protocols", "two_clocks", "closing"],
+    },
+}
 
 
 # Newer models think by default and can spend the whole budget thinking (seen
@@ -85,7 +115,9 @@ def _call(messages, max_tokens=16000):
     last = None
     for i in range(_VARIANT["i"], len(_THINKING_VARIANTS)):
         body = {"model": MODEL, "max_tokens": max_tokens, "system": SYSTEM,
-                "messages": messages, **_THINKING_VARIANTS[i]}
+                "messages": messages, "tools": [TOOL],
+                "tool_choice": {"type": "tool", "name": "write_portrait"},
+                **_THINKING_VARIANTS[i]}
         r = requests.post(
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": key, "anthropic-version": "2023-06-01",
@@ -101,7 +133,11 @@ def _call(messages, max_tokens=16000):
         raise ModelOutputError(f"API {r.status_code}: {r.text[:500]}")
     data = r.json()
     blocks = data.get("content", [])
-    text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+    tool_in = next((b.get("input") for b in blocks if b.get("type") == "tool_use"), None)
+    # The tool input arrives as parsed JSON, so it cannot be malformed. Re-serialise
+    # it so the rest of the pipeline (and the repair turn) keeps working on text.
+    text = json.dumps(tool_in, ensure_ascii=False) if tool_in else \
+        "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
     usage = data.get("usage", {})
     usage["stop_reason"] = data.get("stop_reason")
     usage["block_types"] = [b.get("type") for b in blocks]
@@ -147,7 +183,7 @@ def write_content(chart, tl, order):
 
 def repair(msgs, prev_text, issues):
     msgs = msgs + [{"role": "assistant", "content": prev_text},
-                   {"role": "user", "content": "Automatic QC found these problems. Fix every one and return the full corrected JSON only:\n- " + "\n- ".join(issues)}]
+                   {"role": "user", "content": "Automatic QC found these problems in the draft above. Fix every one and call write_portrait again with the full corrected content:\n- " + "\n- ".join(issues)}]
     text, usage = _call(msgs)
     return _parse(text, usage), text, usage
 
