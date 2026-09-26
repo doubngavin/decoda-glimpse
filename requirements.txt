@@ -5,3 +5,6 @@ pyswisseph
 sxtwl
 timezonefinder
 requests
+weasyprint==62.3
+pypdfium2
+python-multipart

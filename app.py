@@ -3,7 +3,10 @@
 POST /glimpse  { name, date:'YYYY-MM-DD', time:'HH:MM', city }  ->  teaser JSON
 Run locally:  uvicorn app:app --reload
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Form
+from fastapi.responses import HTMLResponse
+import os, time as _time, re as _re
+import portrait
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime
@@ -164,3 +167,101 @@ def glimpse(req: GlimpseReq):
 
     # (email capture: store req.email to your list here)
     return out
+
+
+# ================================================================ portrait (Self)
+# Free full portrait, written by the Claude API, QC'd by code, approved by a
+# human with one click, then emailed. See portrait.py.
+
+class PortraitReq(BaseModel):
+    name: str
+    email: str
+    date: str
+    time: str
+    city: str
+    sex: str | None = None
+    life_events: str | None = None
+    website: str | None = None        # honeypot: humans never fill it
+
+
+_HITS: dict = {}
+DAILY_CAP = int(os.environ.get("PORTRAIT_DAILY_CAP", "25"))   # guards API spend
+
+
+def _limited(ip):
+    now = _time.time()
+    day = [t for t in _HITS.get("_all", []) if now - t < 86400]
+    mine = [t for t in _HITS.get(ip, []) if now - t < 3600]
+    if len(day) >= DAILY_CAP or len(mine) >= 3:
+        return True
+    _HITS["_all"] = day + [now]
+    _HITS[ip] = mine + [now]
+    return False
+
+
+@app.post("/portrait")
+def portrait_request(req: PortraitReq, bg: BackgroundTasks, request: Request):
+    if req.website:
+        return {"ok": True}
+    if not _re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", req.email.strip()):
+        raise HTTPException(400, "Please check your email address.")
+    try:
+        d = datetime.strptime(req.date, "%Y-%m-%d")
+        t = datetime.strptime(req.time, "%H:%M")
+    except ValueError:
+        raise HTTPException(400, "date must be YYYY-MM-DD and time HH:MM")
+    if _limited(request.client.host if request.client else "?"):
+        raise HTTPException(429, "Too many requests right now. Please try again later.")
+    try:
+        lat, lon, place = geocode(req.city)
+    except CityNotFound:
+        raise HTTPException(400, "We could not find that birth city. Try \"City, Country\", for example \"Lyon, France\".")
+    except GeocoderUnavailable:
+        raise HTTPException(503, "The location service is temporarily unavailable. Please try again in a moment.")
+    tz = tz_offset(lat, lon, datetime(d.year, d.month, d.day, t.hour, t.minute))
+    data = req.model_dump(exclude={"website"})
+    data.update(name=req.name.strip()[:80], email=req.email.strip(),
+                life_events=(req.life_events or "")[:1500],
+                _lat=lat, _lon=lon, _place=place, _tz=tz)
+    oid = portrait.new_order(data)
+
+    def ctx(r):
+        y, mo, dd = [int(x) for x in r["date"].split("-")]
+        hh, mm = [int(x) for x in r["time"].split(":")]
+        return engine.compute(y, mo, dd, hh, mm, r["_lat"], r["_lon"], r["_tz"]), r["_place"], r["_tz"]
+
+    bg.add_task(portrait.run, oid, ctx)
+    return {"ok": True, "place": place}
+
+
+_PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Decoda review</title><body style="font-family:system-ui;background:#0B0B0B;color:#F2EFE6;max-width:520px;margin:12vh auto;padding:0 24px">{}</body>"""
+
+
+@app.get("/approve/{oid}", response_class=HTMLResponse)
+def approve_page(oid: str, sig: str = ""):
+    # GET never sends: mail scanners open links. Sending needs the button (POST).
+    if not portrait.check_sig(oid, sig):
+        raise HTTPException(403, "bad link")
+    try:
+        rec = portrait.load(oid)
+    except FileNotFoundError:
+        return _PAGE.format("<h2>Not found</h2><p>This order is no longer on the server (it restarts). Send the PDF from the review email by hand.</p>")
+    r = rec["req"]
+    flags = "".join(f"<li>{i}</li>" for i in rec.get("issues", []))
+    flags = f"<p style='color:#e8a33d'>QC flags:</p><ul>{flags}</ul>" if flags else "<p>QC: clean.</p>"
+    return _PAGE.format(f"""<h2>Send to {r['name']}?</h2><p>{r['email']} · status: {rec.get('status')}</p>{flags}
+<form method=post><input type=hidden name=sig value="{sig}"><button style="font-size:18px;padding:12px 28px;margin-top:16px">Approve and send</button></form>""")
+
+
+@app.post("/approve/{oid}", response_class=HTMLResponse)
+def approve_send(oid: str, sig: str = Form("")):
+    if not portrait.check_sig(oid, sig):
+        raise HTTPException(403, "bad link")
+    try:
+        result = portrait.approve(oid)
+    except FileNotFoundError:
+        result = "order no longer on the server; send the PDF by hand"
+    except Exception as e:
+        result = f"error: {e}"
+    return _PAGE.format(f"<h2>{result}</h2>")
