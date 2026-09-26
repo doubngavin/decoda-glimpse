@@ -207,6 +207,53 @@ def auto_qc(c, chart):
     return sorted(set(issues))
 
 
+
+def _blk(x):
+    if isinstance(x, dict):
+        return {"title": str(x.get("title", "")), "body": str(x.get("body", x.get("text", ""))),
+                "mech": str(x.get("mech", x.get("mechanics", "")))}
+    return {"title": "", "body": str(x), "mech": ""}
+
+
+def normalize(c):
+    """The model sometimes returns a string where the schema wants an object,
+    or a bare list where it wants {lead, items}. Coerce shapes, never content."""
+    c = dict(c or {})
+    for k in LIST_KEYS:
+        v = c.get(k) or []
+        if isinstance(v, dict):
+            v = v.get("items") or list(v.values())
+        if not isinstance(v, list):
+            v = [v]
+        c[k] = [_blk(x) for x in v]
+    for k in ["convergence", "divergence", "shadow", "two_clocks", "actual_life"]:
+        v = c.get(k)
+        if v is None:
+            continue
+        if isinstance(v, str):
+            v = {"lead": "", "items": [v]}
+        elif isinstance(v, list):
+            v = {"lead": "", "items": v}
+        items = v.get("items") or []
+        if not isinstance(items, list):
+            items = [items]
+        c[k] = {"lead": str(v.get("lead") or ""), "items": [_blk(x) for x in items]}
+    s = c.get("strengths")
+    if s is not None:
+        if isinstance(s, str):
+            s = {"lead": "", "items": [s]}
+        elif isinstance(s, list):
+            s = {"lead": "", "items": s}
+        c["strengths"] = {"lead": str(s.get("lead") or ""),
+                          "items": [x if isinstance(x, str) else " ".join(str(v) for v in x.values()) if isinstance(x, dict) else str(x)
+                                    for x in (s.get("items") or [])]}
+    for k in ["archetype", "essence", "core_statement", "closing"]:
+        if k in c and not isinstance(c[k], str):
+            c[k] = str(c[k])
+    if c.get("trust_block") is not None and not isinstance(c["trust_block"], str):
+        c["trust_block"] = str(c["trust_block"])
+    return c
+
 def fix_dashes(c):
     s = json.dumps(c, ensure_ascii=False)
     s = s.replace(" — ", ", ").replace("—", ", ").replace(" – ", ", ").replace("–", "-")
@@ -320,12 +367,12 @@ def run(oid, compute_ctx):
                  "birth_time_confidence": req.get("birth_time_confidence", "exact")}
 
         content, msgs, raw, u1 = write_content(chart, tl, order)
-        content = fix_dashes(content)
+        content = normalize(fix_dashes(content))
         issues = auto_qc(content, chart)
         usage = [u1]
         if issues:
             content, raw, u2 = repair(msgs, raw, issues)
-            content = fix_dashes(content)
+            content = normalize(fix_dashes(content))
             usage.append(u2)
             issues = auto_qc(content, chart)
 
@@ -367,7 +414,7 @@ Took {rec['seconds']} s.""",
         save(oid, rec)
         try:
             send_mail(REVIEW_TO, f"[Decoda ERROR] {req.get('name')}",
-                      f"Automatic portrait failed. Make it by hand.\n\nRequest:\n{json.dumps({k: v for k, v in req.items() if not k.startswith('_')}, ensure_ascii=False, indent=1)}\n\nError: {e}")
+                      f"Automatic portrait failed. Make it by hand.\n\nRequest:\n{json.dumps({k: v for k, v in req.items() if not k.startswith('_')}, ensure_ascii=False, indent=1)}\n\nError: {e}\n\n{traceback.format_exc()[-1500:]}")
         except Exception:
             pass
 
