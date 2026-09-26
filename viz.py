@@ -197,6 +197,9 @@ MUTED = "#B7B2A8"
 BORDER = "#393833"
 
 _CHAR_W = 0.56          # mean glyph width as a fraction of font size
+# Label sizes in viewBox units. The chart is 1000 wide and usually shown at
+# 700 to 1100 px, so 12 units is the floor for text that stays readable.
+FS_LABEL, FS_SMALL, FS_BAND, FS_NOTE, FS_HERE = 12, 11, 12, 13, 14
 
 
 def _tx(x, s, size, anchor="middle"):
@@ -219,8 +222,8 @@ def _txt(x, y, s, size, fill, anchor="middle", weight=400, opacity=1,
 
 def _band_row(x0, x1, y, h, stages, span, color, accent, age, label):
     """One horizontal framework band, with the segment holding `age` lit up."""
-    out = [_txt(x0, y - 7, label.upper(), 9, MUTED, anchor="start",
-                extra='letter-spacing="1.6"')]
+    out = [_txt(x0, y - 8, label.upper(), FS_SMALL, MUTED, anchor="start",
+                extra='letter-spacing="1.4"')]
     for lo, hi, name in stages:
         if lo >= span:
             break
@@ -234,12 +237,13 @@ def _band_row(x0, x1, y, h, stages, span, color, accent, age, label):
         # only label a segment wide enough to hold text, else it turns to mush
         if bw > 34:
             short = name
-            for cand in (name, name.split(",")[0].split(":")[0], name.split(" ")[0]):
+            for cand in (name, name.split(",")[0].split(":")[0],
+                         " ".join(name.split(" ")[:2]), name.split(" ")[0]):
                 short = cand
-                if len(cand) * _CHAR_W * 9 < bw - 10:
+                if len(cand) * _CHAR_W * FS_BAND < bw - 10:
                     break
-            if len(short) * _CHAR_W * 9 < bw - 8:
-                out.append(_txt(bx + 6, y + h / 2 + 3.2, short, 9,
+            if len(short) * _CHAR_W * FS_BAND < bw - 8:
+                out.append(_txt(bx + 6, y + h / 2 + 4.2, short, FS_BAND,
                                 accent if live else MUTED, anchor="start",
                                 weight=500 if live else 400))
     return "".join(out)
@@ -266,7 +270,7 @@ def life_arc(tl, width=1000, color="#F2EFE6", accent=ACCENT, bg="#0B0B0B",
         return x0 + (x1 - x0) * a / span
 
     now_x = X(age)
-    s = [f'<svg viewBox="0 0 {width} 700" width="100%" '
+    s = [f'<svg viewBox="0 0 {width} __VBH__" width="100%" '
          f'xmlns="http://www.w3.org/2000/svg" font-family="Montserrat,DeFonte">']
 
     # ---- solar arc -------------------------------------------------
@@ -286,21 +290,21 @@ def life_arc(tl, width=1000, color="#F2EFE6", accent=ACCENT, bg="#0B0B0B",
     nx0, nx1 = X(tl["arc"]["noon_from"]), X(tl["arc"]["noon_to"])
     s.append(f'<rect x="{nx0:.1f}" y="{peak - 14}" width="{nx1 - nx0:.1f}" '
              f'height="{base_y - peak + 14}" fill="{accent}" opacity="0.06"/>')
-    s.append(_txt((nx0 + nx1) / 2, peak - 20,
-                  f'NOON · {tl["arc"]["noon_from"]}-{tl["arc"]["noon_to"]}', 9,
+    s.append(_txt((nx0 + nx1) / 2, base_y - 10,
+                  f'NOON · {tl["arc"]["noon_from"]}-{tl["arc"]["noon_to"]}', FS_SMALL,
                   accent, extra='letter-spacing="1.4"'))
-    s.append(_txt(X(span * 0.22), 150, "morning, turned outward", 12, MUTED,
+    s.append(_txt(X(span * 0.22), 150, "morning, turned outward", FS_NOTE + 1, MUTED,
                   extra='font-style="italic"'))
-    s.append(_txt(X(span * 0.80), 150, "afternoon, turned inward", 12, MUTED,
+    s.append(_txt(X(span * 0.80), 150, "afternoon, turned inward", FS_NOTE + 1, MUTED,
                   extra='font-style="italic"'))
 
     # ---- you are here ----------------------------------------------
     now_y = base_y - (base_y - peak) * math.sin(math.pi * (age / span))
-    s.append(f'<line x1="{now_x:.1f}" y1="{now_y:.1f}" x2="{now_x:.1f}" y2="644" '
+    s.append(f'<line x1="{now_x:.1f}" y1="{now_y:.1f}" x2="{now_x:.1f}" y2="__NOWLINE_END__" '
              f'stroke="{accent}" stroke-width="1.2" stroke-dasharray="3 4" opacity="0.75"/>')
     s.append(f'<circle cx="{now_x:.1f}" cy="{now_y:.1f}" r="6" fill="{accent}"/>')
     here = f'you · {age}' if share else f'you · {age} · {tl["today"][:7]}'
-    s.append(_txt(now_x, now_y - 14, here, 11, accent, weight=500))
+    s.append(_txt(now_x, now_y - 16, here, FS_HERE, accent, weight=500))
 
     # ---- axis -------------------------------------------------------
     s.append(f'<line x1="{x0}" y1="232" x2="{x1}" y2="232" stroke="{color}" '
@@ -309,8 +313,8 @@ def life_arc(tl, width=1000, color="#F2EFE6", accent=ACCENT, bg="#0B0B0B",
         tx = X(a)
         s.append(f'<line x1="{tx:.1f}" y1="232" x2="{tx:.1f}" y2="237" '
                  f'stroke="{color}" stroke-width="0.6" opacity="0.3"/>')
-        s.append(_txt(tx, 250, f"{a}" if share else f"{a} · {birth_year + a}",
-                      9, MUTED))
+        s.append(_txt(tx, 252, f"{a}" if share else f"{a} · {birth_year + a}",
+                      FS_SMALL - 0.5, MUTED))
 
     # ---- framework bands --------------------------------------------
     y = 282
@@ -318,13 +322,13 @@ def life_arc(tl, width=1000, color="#F2EFE6", accent=ACCENT, bg="#0B0B0B",
              ("Levinson · seasons of a life", tl["bands"]["levinson"]),
              ("Erikson · the central conflict", tl["bands"]["erikson"])]
     for label, stages in bands:
-        s.append(_band_row(x0, x1, y, 22, stages, span, color, accent, age, label))
-        y += 46
+        s.append(_band_row(x0, x1, y, 26, stages, span, color, accent, age, label))
+        y += 52
 
     # ---- BaZi luck pillars -------------------------------------------
     lp = tl.get("luck_pillars")
     if lp:
-        s.append(_txt(x0, y - 7, "BAZI · TEN YEAR LUCK PILLARS", 9, MUTED,
+        s.append(_txt(x0, y - 8, "BAZI · TEN YEAR LUCK PILLARS", FS_SMALL, MUTED,
                       anchor="start", extra='letter-spacing="1.6"'))
         for p in lp["pillars"]:
             if p["start_age"] >= span:
@@ -332,24 +336,24 @@ def life_arc(tl, width=1000, color="#F2EFE6", accent=ACCENT, bg="#0B0B0B",
             bx, bw = X(p["start_age"]), X(min(p["end_age"], span)) - X(p["start_age"])
             live = p["start_age"] <= age < p["end_age"]
             s.append(f'<rect x="{bx:.1f}" y="{y}" width="{max(bw - 2, 1):.1f}" '
-                     f'height="22" fill="{accent if live else color}" '
+                     f'height="26" fill="{accent if live else color}" '
                      f'opacity="{0.22 if live else 0.07}"/>')
             name = f'{p["gan"]} {p["zhi"]}'
             if bw > 58:
-                s.append(_txt(bx + 6, y + 15.2, name, 9,
+                s.append(_txt(bx + 6, y + 17.2, name, FS_BAND,
                               accent if live else MUTED, anchor="start",
                               weight=500 if live else 400))
-        y += 46
+        y += 52
     else:
         s.append(_txt(x0, y + 8, "BaZi luck pillars need a birth sex to set their "
-                                 "direction, so they are left out here.", 9, MUTED,
+                                 "direction, so they are left out here.", FS_SMALL, MUTED,
                       anchor="start", opacity=0.8))
         y += 30
 
     # ---- transit markers ---------------------------------------------
-    s.append(_txt(x0, y - 7, "PLANETARY CYCLES · DATED", 9, MUTED,
+    s.append(_txt(x0, y - 8, "PLANETARY CYCLES · DATED", FS_SMALL, MUTED,
                   anchor="start", extra='letter-spacing="1.6"'))
-    ty = y + 42
+    ty = y + 62
     s.append(f'<line x1="{x0}" y1="{ty}" x2="{x1}" y2="{ty}" stroke="{color}" '
              f'stroke-width="0.6" opacity="0.25"/>')
     short = {"Saturn return": "Saturn return", "Saturn square Saturn": "Saturn sq",
@@ -359,7 +363,7 @@ def life_arc(tl, width=1000, color="#F2EFE6", accent=ACCENT, bg="#0B0B0B",
     # Markers cluster badly in the forties, where four different cycles land
     # within a few years. Labels are assigned to lanes above and below the line,
     # and a lane is only taken if the text actually clears what is already in it.
-    lanes = [(-1, 11, 22), (1, 16, 27), (-1, 33, 44), (1, 38, 49)]
+    lanes = [(-1, 14, 28), (1, 20, 34), (-1, 44, 58), (1, 50, 64)]
     lane_end = [-1e9] * len(lanes)
     drawn = []
     for e in sorted(tl["transits"], key=lambda e: e["age"]):
@@ -368,7 +372,7 @@ def life_arc(tl, width=1000, color="#F2EFE6", accent=ACCENT, bg="#0B0B0B",
         ex = X(e["age"])
         big = e["weight"] >= 2
         lab = short.get(e["label"], e["label"])
-        w = max(len(lab), 4) * _CHAR_W * 9 + 8
+        w = max(len(lab), 4) * _CHAR_W * FS_LABEL + 10
         slot = None
         for i in range(len(lanes)):
             if ex - w / 2 > lane_end[i]:
@@ -382,23 +386,27 @@ def life_arc(tl, width=1000, color="#F2EFE6", accent=ACCENT, bg="#0B0B0B",
         sign, d_lab, d_year = lanes[slot]
         yl = ty + sign * d_lab if sign > 0 else ty - d_lab
         yy = ty + sign * d_year if sign > 0 else ty - d_year
-        s.append(_txt(ex, yl, lab, 9, color if big else MUTED,
+        s.append(_txt(ex, yl, lab, FS_LABEL, color if big else MUTED,
                       weight=500 if big else 400))
         s.append(_txt(ex, yy, f'age {e["age"]}' if share else f'{e["year"]}',
-                      8.5, MUTED))
+                      FS_SMALL, MUTED))
         drawn.append(lab)
 
     # ---- the one row a birth chart cannot fill --------------------------
-    ly = y + 118
-    s.append(_txt(x0, ly - 7, "YOUR ACTUAL LIFE", 9, MUTED, anchor="start",
+    ly = y + 150
+    s.append(_txt(x0, ly - 8, "YOUR ACTUAL LIFE", FS_SMALL, MUTED, anchor="start",
                   extra='letter-spacing="1.6"'))
-    s.append(f'<rect x="{x0}" y="{ly}" width="{x1 - x0:.1f}" height="26" fill="none" '
+    s.append(f'<rect x="{x0}" y="{ly}" width="{x1 - x0:.1f}" height="32" fill="none" '
              f'stroke="{color}" stroke-width="0.8" stroke-dasharray="5 5" opacity="0.4"/>')
-    s.append(_txt((x0 + x1) / 2, ly + 17,
+    s.append(_txt((x0 + x1) / 2, ly + 21,
                   "no data yet · a birth chart cannot know what you have lived",
-                  10, MUTED, extra='font-style="italic"'))
-    s.append(f'<circle cx="{x0}" cy="{ly + 13}" r="3.5" fill="{color}" opacity="0.7"/>')
-    s.append(_txt(x0 + 2, ly + 42, "birth", 9, MUTED, anchor="start"))
+                  FS_NOTE, MUTED, extra='font-style="italic"'))
+    s.append(f'<circle cx="{x0}" cy="{ly + 16}" r="4" fill="{color}" opacity="0.7"/>')
+    s.append(_txt(x0 + 2, ly + 50, "birth", FS_SMALL, MUTED, anchor="start"))
 
     s.append("</svg>")
-    return "".join(s)
+    out = "".join(s)
+    # the dashed now-line and the canvas height depend on how many bands were
+    # drawn, which is only known at the end
+    return (out.replace("__NOWLINE_END__", f"{ly + 32}")
+               .replace("__VBH__", f"{int(ly + 66)}"))
