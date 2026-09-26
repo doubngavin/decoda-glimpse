@@ -166,11 +166,16 @@ def _qc_clocks(block):
             raise ValueError(f"QC fail, section 13 (two clocks): '{m.group(0)}'")
 
 def _timeline_pages(tl):
-    arc = viz.life_arc(tl, width=1000)
-    out = [_P("dark land", f"""<div class="lab dim">12 · Your timeline</div><div class="rule"></div>
-      <div class="ins" style="margin-bottom:2mm">Your life as one arc, every date calculated.</div>
-      <div class="viz" style="margin-top:3mm">{arc}</div>
-      <div class="viz-cap">Bands: Jung, Levinson, Erikson. Markers: dated returns and oppositions from Swiss Ephemeris. Luck pillars from your BaZi. Nothing on this page is written, only calculated.</div>""",
+    # Light portrait page, ink on paper: the same page the homepage shows.
+    GOLD = "#8C6A2E"
+    arc = viz.life_arc(tl, width=1000, color=viz.INK, accent=GOLD, bg=viz.PAPER)
+    arc = arc.replace("#B7B2A8", "#5B5851").replace("#D6B982", GOLD)
+    out = [_P("light", f"""<div class="lab dim">12 · Your timeline</div><div class="rule"></div>
+      <div class="ins">Your life as one arc, every date calculated.</div>
+      <div class="viz" style="margin-top:4mm">{arc}</div>
+      <div class="viz-cap">Bands: Jung, Levinson, Erikson. Markers: dated returns and oppositions from Swiss Ephemeris. Luck pillars from your BaZi. Nothing on this page is written, only calculated.</div>
+      <div class="rule"></div>
+      <p style="font-size:10pt">Read it from the left. The years behind the dotted line are ones you can check against memory; the markers ahead are dates, not events. The next page lists seven years, three of them already lived.</p>""",
       _ft("12", ""))]
     rows = []
     for y in tl["years"]:

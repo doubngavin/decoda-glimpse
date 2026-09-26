@@ -65,7 +65,11 @@ closing: string.
 Paragraphs inside a body are separated by \\n\\n. Plain text, no markdown."""
 
 
-def _call(messages, max_tokens=16000):
+class ModelOutputError(Exception):
+    pass
+
+
+def _call(messages, max_tokens=20000):
     key = os.environ["ANTHROPIC_API_KEY"]
     r = requests.post(
         "https://api.anthropic.com/v1/messages",
@@ -75,18 +79,28 @@ def _call(messages, max_tokens=16000):
               "messages": messages},
         timeout=900,
     )
-    r.raise_for_status()
+    if r.status_code >= 400:
+        raise ModelOutputError(f"API {r.status_code}: {r.text[:500]}")
     data = r.json()
-    text = "".join(b.get("text", "") for b in data.get("content", []))
+    blocks = data.get("content", [])
+    text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
     usage = data.get("usage", {})
+    usage["stop_reason"] = data.get("stop_reason")
+    usage["block_types"] = [b.get("type") for b in blocks]
+    if not text.strip():
+        raise ModelOutputError(f"empty text; stop_reason={data.get('stop_reason')} blocks={usage['block_types']} usage={data.get('usage')}")
     return text, usage
 
 
-def _parse(text):
+def _parse(text, usage=None):
     t = text.strip()
     t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t)
     a, b = t.find("{"), t.rfind("}")
-    return json.loads(t[a:b + 1])
+    try:
+        return json.loads(t[a:b + 1])
+    except Exception as e:
+        raise ModelOutputError(f"bad JSON ({e}); stop_reason={(usage or {}).get('stop_reason')}; "
+                               f"len={len(t)}; head={t[:200]!r}; tail={t[-200:]!r}")
 
 
 def _chart_payload(chart, tl, order):
@@ -109,14 +123,14 @@ def write_content(chart, tl, order):
         user += "\n\nLIFE EVENTS: none given. actual_life must be null."
     msgs = [{"role": "user", "content": user}]
     text, usage = _call(msgs)
-    return _parse(text), msgs, text, usage
+    return _parse(text, usage), msgs, text, usage
 
 
 def repair(msgs, prev_text, issues):
     msgs = msgs + [{"role": "assistant", "content": prev_text},
                    {"role": "user", "content": "Automatic QC found these problems. Fix every one and return the full corrected JSON only:\n- " + "\n- ".join(issues)}]
     text, usage = _call(msgs)
-    return _parse(text), text, usage
+    return _parse(text, usage), text, usage
 
 # ---------------------------------------------------------------- automatic QC
 
