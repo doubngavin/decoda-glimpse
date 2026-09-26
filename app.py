@@ -10,6 +10,8 @@ from datetime import datetime
 import requests
 import engine
 import teaser
+import timeline
+import viz
 
 app = FastAPI(title="Decoda Glimpse")
 app.add_middleware(
@@ -25,6 +27,10 @@ class GlimpseReq(BaseModel):
     time: str       # HH:MM (24h)
     city: str
     email: str | None = None
+    # Only used to set the direction of the BaZi luck pillars, which is the one
+    # calculation in the whole engine that needs it. Leave it out and that band
+    # is omitted; every other part of the timeline still runs.
+    sex: str | None = None
 
 
 class CityNotFound(Exception):
@@ -126,5 +132,29 @@ def glimpse(req: GlimpseReq):
     out = teaser.make_teaser(chart)
     out["name"] = req.name
     out["place"] = place
+
+    # The computed life timeline. Everything below is derived from the birth
+    # data alone, which is why it is free: it costs nothing to produce and
+    # every line of it can be checked by the reader against their own past.
+    try:
+        sex = req.sex if req.sex in ("male", "female") else None
+        tl = timeline.build(chart, d.date(), gender=sex)
+        out["timeline"] = {
+            "age": tl["age"],
+            "now": tl["bands"]["now"],
+            "years": tl["years"],
+            "next_transits": tl["next_transits"],
+            "luck_pillars": tl["luck_pillars"],
+        }
+        out["timeline_svg"] = viz.life_arc(tl)
+        # The version that gets posted in public: ages only, no birth date,
+        # no calendar years. See viz.life_arc(share=True).
+        out["timeline_share_svg"] = viz.life_arc(tl, share=True)
+    except Exception as exc:
+        # A timeline failure must never take the reading down with it. Say so
+        # rather than returning a half page that looks like nothing went wrong.
+        out["timeline"] = None
+        out["timeline_error"] = str(exc)
+
     # (email capture: store req.email to your list here)
     return out

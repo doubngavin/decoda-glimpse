@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Decoda compute engine: Western astrology + BaZi + Human Design.
-Deterministic. Verified against a known chart (Virgo/Gemini/Cancer, Yi Wood, MG 2/4 Sacral)."""
+Deterministic. Verified against a known chart: 1996-09-05 14:45 UTC+7 Long Xuyen = Virgo/Gemini/Capricorn, Yi Wood Fire-dominant, MG 2/5 Sacral, channels 11-56/18-58/20-34/21-45."""
 import swisseph as swe
 import sxtwl
 from datetime import datetime, timedelta
@@ -44,7 +44,13 @@ _GAN = ["Jia","Yi","Bing","Ding","Wu","Ji","Geng","Xin","Ren","Gui"]
 _GAN_EL = ["Wood","Wood","Fire","Fire","Earth","Earth","Metal","Metal","Water","Water"]
 _GAN_YIN = ["Yang Wood","Yin Wood","Yang Fire","Yin Fire","Yang Earth","Yin Earth",
             "Yang Metal","Yin Metal","Yang Water","Yin Water"]
+_ZHI = ["Zi","Chou","Yin","Mao","Chen","Si","Wu","Wei","Shen","You","Xu","Hai"]
+_ZHI_ANIMAL = ["Rat","Ox","Tiger","Rabbit","Dragon","Snake","Horse","Goat","Monkey","Rooster","Dog","Pig"]
 _ZHI_EL = ["Water","Earth","Wood","Wood","Earth","Fire","Fire","Earth","Metal","Metal","Earth","Water"]
+
+def _pillar(tg, dz):
+    return {"gan": _GAN_YIN[tg], "zhi": _ZHI[dz], "animal": _ZHI_ANIMAL[dz],
+            "gan_element": _GAN_EL[tg], "zhi_element": _ZHI_EL[dz]}
 
 
 def _activations(jd):
@@ -71,10 +77,26 @@ def compute(year, month, day, hour, minute, lat, lon, tz):
     merc = swe.calc_ut(jd, swe.MERCURY)[0][0]
     venus = swe.calc_ut(jd, swe.VENUS)[0][0]
     mars = swe.calc_ut(jd, swe.MARS)[0][0]
+    # Slow bodies: not used by the portrait text, but the life timeline needs
+    # them because every long cycle (Saturn return, Uranus opposition and so on)
+    # is measured against its own natal position.
+    jup = swe.calc_ut(jd, swe.JUPITER)[0][0]
+    sat = swe.calc_ut(jd, swe.SATURN)[0][0]
+    ura = swe.calc_ut(jd, swe.URANUS)[0][0]
+    nep = swe.calc_ut(jd, swe.NEPTUNE)[0][0]
+    plu = swe.calc_ut(jd, swe.PLUTO)[0][0]
     cusps, ascmc = swe.houses(jd, lat, lon, b'P')
-    asc = ascmc[0]
+    asc, mc = ascmc[0], ascmc[1]
     astro = {"sun": _sign(sun), "moon": _sign(moon), "rising": _sign(asc),
-             "mercury": _sign(merc), "venus": _sign(venus), "mars": _sign(mars)}
+             "mercury": _sign(merc), "venus": _sign(venus), "mars": _sign(mars),
+             "jupiter": _sign(jup), "saturn": _sign(sat), "uranus": _sign(ura),
+             "neptune": _sign(nep), "pluto": _sign(plu), "mc": _sign(mc),
+             "lon": {"Sun": sun % 360, "Moon": moon % 360, "Mercury": merc % 360,
+                     "Venus": venus % 360, "Mars": mars % 360, "Rising": asc % 360,
+                     "Jupiter": jup % 360, "Saturn": sat % 360, "Uranus": ura % 360,
+                     "Neptune": nep % 360, "Pluto": plu % 360, "MC": mc % 360},
+             "houses": [c % 360 for c in cusps],
+             "jd": jd}
 
     # BaZi
     d = sxtwl.fromSolar(year, month, day)
@@ -86,8 +108,11 @@ def compute(year, month, day, hour, minute, lat, lon, tz):
         elems[_GAN_EL[t]] += 1
         elems[_ZHI_EL[z]] += 1
     dominant = max(elems, key=elems.get)
+    scarce = min(elems, key=elems.get)
     bazi = {"day_master": _GAN_YIN[dp.tg], "day_master_element": _GAN_EL[dp.tg],
-            "elements": elems, "dominant": dominant}
+            "elements": elems, "dominant": dominant, "scarce": scarce,
+            "pillars": {"year": _pillar(yp.tg, yp.dz), "month": _pillar(mp.tg, mp.dz),
+                        "day": _pillar(dp.tg, dp.dz), "hour": _pillar(ht, hz)}}
 
     # Human Design
     tgt = (sun - 88) % 360
@@ -128,6 +153,9 @@ def compute(year, month, day, hour, minute, lat, lon, tz):
     all_centers = {"Head","Ajna","Throat","G","Heart","Sacral","Spleen","SolarPlexus","Root"}
     hd = {"type": htype, "authority": authority,
           "profile": f"{pers['Sun'][1]}/{des['Sun'][1]}",
-          "defined": sorted(defined), "open": sorted(all_centers - defined)}
+          "defined": sorted(defined), "open": sorted(all_centers - defined),
+          "channels": [f"{a}-{b}" for a, b in ach],
+          "gates_personality": {k: f"{v[0]}.{v[1]}" for k, v in pers.items()},
+          "gates_design": {k: f"{v[0]}.{v[1]}" for k, v in des.items()}}
 
     return {"astro": astro, "bazi": bazi, "hd": hd}
