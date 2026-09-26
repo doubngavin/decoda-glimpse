@@ -187,44 +187,58 @@ def transits(chart, birth, span_years=70, step_days=None):
     Outer planets go retrograde, so one contact usually happens two or three
     times across a year. They are grouped and reported as one event with its
     exact passes kept, because that is what a person actually lives through.
+
+    Performance matters here: this runs on a small shared CPU for every free
+    Glimpse. Each body is walked through time ONCE and every angle it cares
+    about is tested in the same pass, and the bisection stops at day level.
     """
     lon = chart["astro"]["lon"]
     jd0 = chart["astro"]["jd"]
     jd1 = jd0 + span_years * 365.25
-    out = []
 
+    by_body = {}
     for body, angle, label, weight in CYCLES:
+        by_body.setdefault(body, []).append((angle, label, weight))
+
+    def diff(pos, target):
+        return ((pos - target + 180) % 360) - 180
+
+    out = []
+    for body, aspects in by_body.items():
         step = step_days or STEP_DAYS.get(body, 12)
         natal = lon[NATAL_KEY[body]]
-        target = (natal + angle) % 360
-        hits, prev = [], None
+        targets = [((natal + a) % 360, a, lab, w) for a, lab, w in aspects]
+        hits = {i: [] for i in range(len(targets))}
+        prev_jd, prev_d = None, None
         jd = jd0
         while jd < jd1:
-            p = swe.calc_ut(jd, body)[0][0]
-            d = ((p - target + 180) % 360) - 180
-            if prev is not None and prev[1] * d < 0 and abs(d - prev[1]) < 180:
-                a, b = prev[0], jd
-                for _ in range(40):                     # bisect to the day
-                    m = (a + b) / 2
-                    pm = swe.calc_ut(m, body)[0][0]
-                    dm = ((pm - target + 180) % 360) - 180
-                    a, b = (m, b) if dm * prev[1] > 0 else (a, m)
-                hits.append((a + b) / 2)
-            prev = (jd, d)
+            pos = swe.calc_ut(jd, body)[0][0]
+            ds = [diff(pos, t[0]) for t in targets]
+            if prev_d is not None:
+                for i, (d_now, d_was) in enumerate(zip(ds, prev_d)):
+                    if d_was * d_now < 0 and abs(d_now - d_was) < 180:
+                        a, b = prev_jd, jd
+                        for _ in range(12):             # 12 halvings: sub-day
+                            m = (a + b) / 2
+                            dm = diff(swe.calc_ut(m, body)[0][0], targets[i][0])
+                            a, b = (m, b) if dm * d_was > 0 else (a, m)
+                        hits[i].append((a + b) / 2)
+            prev_jd, prev_d = jd, ds
             jd += step
 
-        for group in _group(hits, 500):                 # retrograde passes
-            mid = group[len(group) // 2]
-            when = _jd_to_date(mid)
-            if _age_on(birth, when) < 1:      # planet has not left its natal
-                continue                      # degree yet, not a life event
-            out.append({
-                "label": label, "body": NATAL_KEY[body], "angle": angle,
-                "date": when.isoformat(), "year": when.year,
-                "month": when.month,
-                "age": _age_on(birth, when), "weight": weight,
-                "passes": [_jd_to_date(h).isoformat() for h in group],
-            })
+        for i, (target, angle, label, weight) in enumerate(targets):
+            for group in _group(hits[i], 500):          # retrograde passes
+                mid = group[len(group) // 2]
+                when = _jd_to_date(mid)
+                if _age_on(birth, when) < 1:            # planet has not left its
+                    continue                            # natal degree yet
+                out.append({
+                    "label": label, "body": NATAL_KEY[body], "angle": angle,
+                    "date": when.isoformat(), "year": when.year,
+                    "month": when.month,
+                    "age": _age_on(birth, when), "weight": weight,
+                    "passes": [_jd_to_date(h).isoformat() for h in group],
+                })
 
     out.sort(key=lambda e: e["date"])
     return out

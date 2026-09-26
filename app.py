@@ -89,11 +89,17 @@ def geocode(city: str):
     return float(best["latitude"]), float(best["longitude"]), label
 
 
+# Built ONCE at startup. Constructing TimezoneFinder loads its whole polygon
+# dataset, which cost about 0.7 s on a laptop and several seconds on the free
+# host, and it used to happen on every single request.
+from timezonefinder import TimezoneFinder
+from zoneinfo import ZoneInfo
+_TF = TimezoneFinder()
+
+
 def tz_offset(lat, lon, dt):
     """Historical UTC offset (hours) at the birth datetime, DST-aware."""
-    from timezonefinder import TimezoneFinder
-    from zoneinfo import ZoneInfo
-    tzname = TimezoneFinder().timezone_at(lat=lat, lng=lon)
+    tzname = _TF.timezone_at(lat=lat, lng=lon)
     if not tzname:
         return round(lon / 15.0)  # crude fallback
     off = dt.replace(tzinfo=ZoneInfo(tzname)).utcoffset()
