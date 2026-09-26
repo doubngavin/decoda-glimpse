@@ -213,7 +213,7 @@ def _tx(x, s, size, anchor="middle"):
 
 
 def _txt(x, y, s, size, fill, anchor="middle", weight=400, opacity=1,
-         family="Montserrat,DeFonte", extra=""):
+         family="Montserrat,Helvetica,Arial,sans-serif", extra=""):
     from html import escape
     return (f'<text x="{_tx(x, s, size, anchor):.1f}" y="{y:.1f}" '
             f'font-family="{family}" font-size="{size}" fill="{fill}" '
@@ -271,7 +271,7 @@ def life_arc(tl, width=1000, color="#F2EFE6", accent=ACCENT, bg="#0B0B0B",
 
     now_x = X(age)
     s = [f'<svg viewBox="0 0 {width} __VBH__" width="100%" '
-         f'xmlns="http://www.w3.org/2000/svg" font-family="Montserrat,DeFonte">']
+         f'xmlns="http://www.w3.org/2000/svg" font-family="Montserrat,Helvetica,Arial,sans-serif">']
 
     # ---- solar arc -------------------------------------------------
     base_y, peak = 214, 52
