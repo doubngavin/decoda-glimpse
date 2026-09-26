@@ -16,6 +16,7 @@ import swisseph as swe
 import sxtwl
 
 import engine
+import yeartext
 
 # ---------------------------------------------------------------- constants
 
@@ -332,6 +333,7 @@ def build(chart, birth, gender=None, today=None, span_years=70,
                          for e in ev if e["year"] == y],
             "state": "past" if y < this_year else ("now" if y == this_year else "ahead"),
         })
+        years[-1]["detail"] = yeartext.describe(years[-1], chart)
     return {
         "age": age,
         "today": today.isoformat(),
