@@ -170,8 +170,15 @@ def glimpse(req: GlimpseReq):
 
 
 # ================================================================ portrait (Self)
-# Free full portrait, written by the Claude API, QC'd by code, approved by a
-# human with one click, then emailed. See portrait.py.
+# Paid full portrait (Gumroad, 19 USD since 2026-09-27), written by the Claude
+# API, QC'd by code, approved by a human with one click, then emailed.
+# See portrait.py.
+#
+# Two ways in:
+#   POST /gumroad?k=GUMROAD_KEY   Gumroad Ping after a sale (the normal path)
+#   POST /portrait?k=...          manual: JSON body, key = GUMROAD_KEY or
+#                                 APPROVE_SECRET. Open to the public only if
+#                                 PORTRAIT_OPEN=1 (the old free intake).
 
 class PortraitReq(BaseModel):
     name: str
@@ -199,10 +206,27 @@ def _limited(ip):
     return False
 
 
+def _key_ok(k):
+    import hmac as _hmac
+    for name in ("GUMROAD_KEY", "APPROVE_SECRET"):
+        v = os.environ.get(name)
+        if v and k and _hmac.compare_digest(v, k):
+            return True
+    return False
+
+
+def _compute_ctx(r):
+    y, mo, dd = [int(x) for x in r["date"].split("-")]
+    hh, mm = [int(x) for x in r["time"].split(":")]
+    return engine.compute(y, mo, dd, hh, mm, r["_lat"], r["_lon"], r["_tz"]), r["_place"], r["_tz"]
+
+
 @app.post("/portrait")
-def portrait_request(req: PortraitReq, bg: BackgroundTasks, request: Request):
+def portrait_request(req: PortraitReq, bg: BackgroundTasks, request: Request, k: str = ""):
     if req.website:
         return {"ok": True}
+    if os.environ.get("PORTRAIT_OPEN") != "1" and not _key_ok(k):
+        raise HTTPException(403, "The portrait is ordered at https://decoda.gumroad.com/l/gzcbtz")
     if not _re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", req.email.strip()):
         raise HTTPException(400, "Please check your email address.")
     try:
@@ -223,15 +247,242 @@ def portrait_request(req: PortraitReq, bg: BackgroundTasks, request: Request):
     data.update(name=req.name.strip()[:80], email=req.email.strip(),
                 life_events=(req.life_events or "")[:1500],
                 _lat=lat, _lon=lon, _place=place, _tz=tz)
+    if _key_ok(k):
+        data["_source"] = "manual"
     oid = portrait.new_order(data)
+    bg.add_task(portrait.run, oid, _compute_ctx)
+    return {"ok": True, "place": place, "id": oid}
 
-    def ctx(r):
-        y, mo, dd = [int(x) for x in r["date"].split("-")]
-        hh, mm = [int(x) for x in r["time"].split(":")]
-        return engine.compute(y, mo, dd, hh, mm, r["_lat"], r["_lon"], r["_tz"]), r["_place"], r["_tz"]
 
-    bg.add_task(portrait.run, oid, ctx)
-    return {"ok": True, "place": place}
+# ================================================================ Gumroad Ping
+# Gumroad POSTs application/x-www-form-urlencoded after every sale to the Ping
+# URL set in Gumroad Settings > Advanced:
+#     https://decoda-glimpse.onrender.com/gumroad?k=<GUMROAD_KEY>
+# Gumroad does not sign pings, so the key in the URL is the only guard.
+# Birth details come from the checkout custom fields. Their labels are matched
+# loosely (Gumroad sends them either top level or as custom_fields[Label]).
+# Anything that cannot be read safely is mailed to REVIEW_TO instead of guessed.
+# The endpoint always answers 200 to a valid key, so Gumroad never retries a
+# sale we already hold.
+
+import re
+import hmac as _hmac_g
+import calendar as _cal
+from datetime import date
+
+GUMROAD_SELF = [x.strip() for x in os.environ.get("GUMROAD_SELF_PERMALINKS", "gzcbtz").split(",") if x.strip()]
+
+_GR_STD = {
+    "seller_id", "product_id", "product_name", "permalink", "product_permalink", "short_product_id",
+    "email", "price", "gumroad_fee", "currency", "quantity", "discover_fee_charged", "can_contact",
+    "referrer", "order_number", "sale_id", "sale_timestamp", "purchaser_id", "subscription_id",
+    "variants", "offer_code", "test", "ip_country", "is_gift_receiver_purchase", "refunded",
+    "disputed", "dispute_won", "resource_name", "full_name", "license_key", "is_recurring_charge",
+    "is_preorder_authorization", "shipping_information", "affiliate", "affiliate_credit_amount_cents",
+    "gift_price", "recurrence", "url_params", "card", "k",
+}
+
+_MONTHS = {m.lower(): i for i, m in enumerate(_cal.month_name) if m}
+_MONTHS.update({m.lower(): i for i, m in enumerate(_cal.month_abbr) if m})
+_MONTHS["sept"] = 9
+
+
+def _gr_fields(f: dict) -> dict:
+    """label (lowercased) -> value, for checkout custom fields only."""
+    out = {}
+    for key, val in f.items():
+        val = (val or "").strip()
+        if not val:
+            continue
+        m = re.match(r"custom_fields\[(.+)\]$", key)
+        if m:
+            out[m.group(1).strip().lower()] = val
+        elif key not in _GR_STD and not key.startswith(("variants[", "url_params[", "card[", "shipping_information[")):
+            out[key.strip().lower()] = val
+    return out
+
+
+def _gr_pick(fields, want, avoid=()):
+    for label, val in fields.items():
+        if re.search(want, label) and not (avoid and re.search(avoid, label)):
+            return label, val
+    return None, None
+
+
+def _year(y):
+    y = int(y)
+    if y < 100:
+        y += 1900 if y > datetime.utcnow().year % 100 else 2000
+    return y
+
+
+def _parse_birth_date(raw: str, label: str = ""):
+    """-> ('YYYY-MM-DD', flag or None). Raises ValueError if unreadable.
+    Day/month order: DD/MM unless the label says MM/DD or a part is > 12."""
+    s = raw.strip().lower()
+    flag = None
+    m = re.fullmatch(r"(\d{4})[-/. ](\d{1,2})[-/. ](\d{1,2})", s)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    else:
+        m = re.fullmatch(r"(\d{1,2})\s*[-/. ]\s*(\d{1,2})\s*[-/. ]\s*(\d{2,4})", s)
+        if m:
+            a, b, y = int(m.group(1)), int(m.group(2)), _year(m.group(3))
+            us = bool(re.search(r"mm\s*/\s*dd", label.lower()))
+            if a > 12:
+                d, mo = a, b
+            elif b > 12:
+                mo, d = a, b
+                if not us:
+                    flag = f"birth date '{raw}' read as month/day because {b} > 12"
+            elif us:
+                mo, d = a, b
+            else:
+                d, mo = a, b
+                if a != b and not re.search(r"dd\s*/\s*mm", label.lower()):
+                    flag = f"birth date '{raw}' is ambiguous, read as DAY/MONTH = {d:02d}/{mo:02d}. Confirm with the buyer if unsure."
+        else:
+            words = re.findall(r"[a-z]+", s)
+            nums = [int(x) for x in re.findall(r"\d+", s)]
+            mo = next((_MONTHS[w] for w in words if w in _MONTHS), None)
+            yrs = [n for n in nums if n > 31]
+            days = [n for n in nums if 1 <= n <= 31]
+            if not (mo and yrs and days):
+                raise ValueError(f"cannot read birth date '{raw}'")
+            y, d = _year(yrs[0]), days[0]
+    dt = date(y, mo, d)                       # raises on 31/02 etc.
+    if not (1900 <= dt.year and dt <= datetime.utcnow().date()):
+        raise ValueError(f"birth date '{raw}' out of range")
+    return dt.isoformat(), flag
+
+
+def _parse_birth_time(raw: str, label: str = ""):
+    """-> ('HH:MM', flag or None). Raises ValueError if unreadable or unknown."""
+    s = raw.strip().lower().replace(" ", "")
+    if re.search(r"unknown|dontknow|don'tknow|notsure|\?|khongbiet|n/a", s):
+        raise ValueError(f"birth time not known ('{raw}')")
+    ampm = None
+    m = re.search(r"(a\.?m\.?|p\.?m\.?|sa|sáng|chiều|chieu|tối|toi)$", s)
+    if m:
+        tag = m.group(1)
+        ampm = "am" if tag.startswith(("a", "s")) else "pm"
+        s = s[:m.start()]
+    m = re.fullmatch(r"(\d{1,2})[:.h](\d{2})(?::\d{2})?", s) or re.fullmatch(r"(\d{2})(\d{2})", s) or re.fullmatch(r"(\d{1,2})()", s)
+    if not m:
+        raise ValueError(f"cannot read birth time '{raw}'")
+    h, mi = int(m.group(1)), int(m.group(2) or 0)
+    if ampm:
+        if not 1 <= h <= 12:
+            raise ValueError(f"birth time '{raw}' is not a valid 12-hour time")
+        h = (h % 12) + (12 if ampm == "pm" else 0)
+    if not (0 <= h <= 23 and 0 <= mi <= 59):
+        raise ValueError(f"birth time '{raw}' out of range")
+    flag = None
+    if not ampm and 1 <= h <= 11 and "24" not in label and len(m.group(1)) == 1:
+        flag = f"birth time '{raw}' read as 24-hour ({h:02d}:{mi:02d}, morning). Check it is not PM."
+    return f"{h:02d}:{mi:02d}", flag
+
+
+def _gr_action_mail(subject, why, f, fields):
+    body = f"""A Gumroad sale needs a hand. Nothing was started automatically.
+
+Why: {why}
+
+Buyer: {f.get('full_name') or '-'} <{f.get('email')}>
+Product: {f.get('product_name')} ({f.get('permalink') or f.get('product_permalink')})
+Sale: {f.get('sale_id')} · {f.get('price')} {f.get('currency')} · test={f.get('test', 'false')}
+
+Custom fields as received:
+""" + "\n".join(f"  {k}: {v}" for k, v in fields.items()) + """
+
+To start it by hand once the details are clear, POST JSON to /portrait?k=<GUMROAD_KEY>
+with name, email, date (YYYY-MM-DD), time (HH:MM), city, sex, life_events."""
+    try:
+        portrait.send_mail(portrait.REVIEW_TO, subject, body, reply_to=f.get("email") or None)
+    except Exception:
+        pass
+
+
+@app.post("/gumroad")
+async def gumroad_ping(request: Request, bg: BackgroundTasks, k: str = "", run: str = ""):
+    key = os.environ.get("GUMROAD_KEY")
+    if not key or not k or not _hmac_g.compare_digest(key, k):
+        raise HTTPException(403, "bad key")
+    form = await request.form()
+    f = {name: str(v) for name, v in form.multi_items()}
+    fields = _gr_fields(f)
+    sale = (f.get("sale_id") or f.get("order_number") or "").strip()
+    who = f.get("full_name") or f.get("email") or "?"
+
+    if f.get("refunded") == "true":
+        return {"ok": True, "skipped": "refund"}
+
+    prod = " ".join([f.get("permalink", ""), f.get("product_permalink", ""), f.get("short_product_id", "")])
+    if not any(p in prod for p in GUMROAD_SELF):
+        _gr_action_mail(f"[Decoda sale] {f.get('product_name')} · {who}",
+                        "Not a Self order (e.g. Two). Fulfil it the usual way.", f, fields)
+        return {"ok": True, "skipped": "not self"}
+
+    is_test = f.get("test") == "true"
+    if is_test and run != "1":
+        _gr_action_mail(f"[Decoda ping test] {who}",
+                        "Test ping from Gumroad. Shown so the field labels can be checked. Add &run=1 to the Ping URL to run a test sale end to end.",
+                        f, fields)
+        return {"ok": True, "skipped": "test"}
+
+    marker = os.path.join(portrait.DATA_DIR, f"sale-{re.sub(r'[^A-Za-z0-9_=-]', '', sale)}") if sale else None
+    if marker and os.path.exists(marker):
+        return {"ok": True, "skipped": "duplicate"}
+
+    flags = ["TEST sale from Gumroad"] if is_test else []
+    try:
+        dl, dv = _gr_pick(fields, r"date|dob|birthday|ngày", r"time|giờ")
+        tl_, tv = _gr_pick(fields, r"time|giờ|hour", r"date|ngày")
+        if not dv:                              # one field holding both
+            dl, dv = _gr_pick(fields, r"birth|sinh")
+            if dv and re.search(r"\d{1,2}[:h]\d{2}", dv) and not tv:
+                tv = re.search(r"\d{1,2}[:h]\d{2}\s*(?:am|pm)?", dv, re.I).group(0)
+                dv = dv.replace(tv, "").strip(" ,@")
+                tl_ = dl
+        cl, cv = _gr_pick(fields, r"city|place|location|where|born in|nơi", r"date|time")
+        nl, nv = _gr_pick(fields, r"name|tên", r"city|place|user")
+        _, sv = _gr_pick(fields, r"sex|gender|giới")
+        _, lv = _gr_pick(fields, r"moment|event|life|changed")
+        if not dv or not tv or not cv:
+            raise ValueError("missing " + ", ".join(n for n, v in (("birth date", dv), ("birth time", tv), ("birth city", cv)) if not v))
+        bdate, fl = _parse_birth_date(dv, dl or "")
+        if fl: flags.append(fl)
+        btime, fl = _parse_birth_time(tv, tl_ or "")
+        if fl: flags.append(fl)
+        email = (f.get("email") or "").strip()
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            raise ValueError("no valid buyer email")
+        name = (nv or f.get("full_name") or email.split("@")[0]).strip()[:80]
+        sx = (sv or "").strip().lower()
+        sex = "female" if sx.startswith(("f", "w", "nữ", "nu ")) or sx == "nu" else ("male" if sx.startswith(("m", "nam")) else None)
+        try:
+            lat, lon, place = geocode(cv)
+        except CityNotFound:
+            raise ValueError(f"birth city '{cv}' not found by the geocoder")
+        except GeocoderUnavailable:
+            raise ValueError("geocoder unavailable right now; retry by hand")
+        d = datetime.strptime(bdate, "%Y-%m-%d"); t = datetime.strptime(btime, "%H:%M")
+        tz = tz_offset(lat, lon, datetime(d.year, d.month, d.day, t.hour, t.minute))
+    except Exception as e:
+        _gr_action_mail(f"[Decoda ACTION] Gumroad sale needs details · {who}", str(e), f, fields)
+        if marker:
+            open(marker, "w").write("action")
+        return {"ok": True, "queued": False}
+
+    data = dict(name=name, email=email, date=bdate, time=btime, city=cv, sex=sex,
+                life_events=(lv or "")[:1500], _lat=lat, _lon=lon, _place=place, _tz=tz,
+                _source="gumroad", _sale_id=sale, _flags=flags,
+                _gumroad={k2: v2 for k2, v2 in fields.items()})
+    oid = portrait.new_order(data)
+    if marker:
+        open(marker, "w").write(oid)
+    bg.add_task(portrait.run, oid, _compute_ctx)
+    return {"ok": True, "queued": True}
 
 
 _PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
@@ -270,7 +521,8 @@ def approve_send(oid: str, sig: str = Form("")):
 @app.get("/health/portrait")
 def health_portrait():
     """Can this host render PDFs and is the pipeline configured? No secrets shown."""
-    out = {k: bool(os.environ.get(k)) for k in ("ANTHROPIC_API_KEY", "RESEND_API_KEY", "APPROVE_SECRET")}
+    out = {k: bool(os.environ.get(k)) for k in ("ANTHROPIC_API_KEY", "RESEND_API_KEY", "APPROVE_SECRET", "GUMROAD_KEY")}
+    out["portrait_open"] = os.environ.get("PORTRAIT_OPEN") == "1"
     try:
         from weasyprint import HTML
         HTML(string="<p>ok</p>").write_pdf()

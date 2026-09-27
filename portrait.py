@@ -348,13 +348,15 @@ Which line was wrong, and what should it have said?
 
 Reply to this email with that, even a single sentence. It is the most useful thing anyone can send me right now, and I read every reply myself.
 
+And if the years you have already lived do not match what the portrait says about them, reply within 7 days and you get a full refund. No argument.
+
 ---
 
 If this was useful, there is a version for two.
 
 Decoda · Two reads two charts side by side: a full portrait for each of you, then what actually happens between you. Where you amplify each other, where you grind, and the pattern that keeps repeating. Partners, but also a parent, a sibling, a co-founder.
 
-It is 99 USD, and it is the only thing Decoda sells:
+It is 99 USD:
 https://decoda.gumroad.com/l/jpwhra
 
 No need to reply to that part. Only to the question above.
@@ -423,6 +425,8 @@ def run(oid, compute_ctx):
         over = check_render.check(pdf)
         if over:
             issues.append("overflow risk on pages " + ", ".join(str(p) for p, _ in over))
+        # Intake flags (e.g. an ambiguous date typed at Gumroad checkout) go first.
+        issues = list(req.get("_flags") or []) + issues
 
         rec.update(status="review", order=order, content=content, issues=issues,
                    usage=usage, seconds=round(time.time() - t0))
@@ -436,6 +440,7 @@ def run(oid, compute_ctx):
 Reader: {req['name']} <{req['email']}>
 Born: {req['date']} {req['time']}, {place}
 Sex: {sex or 'not given'} · life events: {'yes' if order['life_events'] else 'no'}
+Source: {req.get('_source', 'form')}{(' · sale ' + req['_sale_id']) if req.get('_sale_id') else ''}
 
 {qc}
 
