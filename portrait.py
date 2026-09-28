@@ -2,7 +2,7 @@
 """Decoda · Self, automated fulfilment.
 
     request -> chart (engine) -> content (Claude API, REPORT-SPEC prompt)
-            -> automatic QC (+ one repair round) -> PDF (build_v2)
+            -> automatic QC (+ repair rounds) -> PDF (build_v3)
             -> review email to Decoda with a one-click approve link
             -> on approve: delivery email to the reader with the PDF
 
@@ -346,7 +346,7 @@ def auto_qc(c, chart):
         items = v if isinstance(v, list) else (v or {}).get("items", []) if isinstance(v, dict) else []
         for b in items:
             if isinstance(b, dict):
-                bodies.append((k, b.get("body", ""), b.get("mech", "")))
+                bodies.append((k, b.get("body") or "", b.get("mech") or ""))
     for k, body, mech in bodies:
         if re.search(r"\b(listed|named as|as named|the JSON|aspect data|branch_relations|computed aspect)\b", body, re.I):
             issues.append(f"{k}: talks about the data ('listed', 'named as' ...); say it to the reader directly")
@@ -370,15 +370,44 @@ def auto_qc(c, chart):
                 pair = frozenset(found[:2])
                 if pair not in chong:
                     issues.append(f"calls {' and '.join(sorted(pair))} a clash; per bazi.branch_relations it is not a clash. Use only listed relations")
+    # BaZi: a triad sentence may only name branches / pillars that are in a computed triad
+    tri = {}                                   # element -> {positions}, {animals}, {zhi}
+    for r in branch_relations(chart["bazi"]):
+        m = re.match(r"(\w+) (\w+) \((\w+)\) and (\w+) (\w+) \((\w+)\): half (\w+) triad", r)
+        if m:
+            t = tri.setdefault(m.group(7), (set(), set(), set()))
+            t[0].update((m.group(1), m.group(4))); t[1].update((m.group(3), m.group(6))); t[2].update((m.group(2), m.group(5)))
+    zhi_names = [z for z in _ZHI if z != "Yin"]            # "Yin" is also the polarity word
+    fields = []
+    def _walk(v):
+        if isinstance(v, str): fields.append(v)
+        elif isinstance(v, dict): [_walk(x) for x in v.values()]
+        elif isinstance(v, list): [_walk(x) for x in v]
+    _walk(c)
+    for sent in (x for f in fields for x in re.split(r"(?<=[.!?;])\s+", f)):
+        m = re.search(r"\b(Water|Wood|Fire|Metal)\s+triad", sent, re.I)
+        if not m:
+            continue
+        el = m.group(1).capitalize()
+        pos, ani, zhi = tri.get(el, (set(), set(), set()))
+        s2 = re.sub(r"\bday master\b", "", sent, flags=re.I)
+        said_pos = set(x.lower() for x in re.findall(r"\b(year|month|day|hour)\b(?=\s+(?:and|branch|branches|pillar|pillars|zhi|,|\w+\s+branch))", s2, re.I))
+        said_ani = set(re.findall(r"\b(" + animals + r")\b", sent))
+        said_zhi = set(re.findall(r"\b(" + "|".join(zhi_names) + r")\b", sent))
+        bad = (said_pos - pos) | (said_ani - ani) | (said_zhi - zhi)
+        if not pos:
+            issues.append(f"names a {el} triad, but this chart has no {el} triad in bazi.branch_relations; remove it")
+        elif bad:
+            issues.append(f"puts {', '.join(sorted(bad))} in the half {el} triad; only {', '.join(sorted(pos))} ({', '.join(sorted(ani))}) form it. Correct the sentence")
     hd = chart["hd"]
     for t in ["Manifesting Generator", "Generator", "Projector", "Manifestor", "Reflector"]:
         if re.search(r"\b(you are|as) an? " + t + r"\b", txt) and t not in hd["type"]:
             issues.append(f"calls the reader a {t}; their type is {hd['type']}")
-    # Herman / Jung guardrails live in build_v2._qc_clocks; run them here too
+    # Herman / Jung guardrails live in build_v3._qc_clocks; run them here too
     try:
-        import build_v2
+        import build_v3
         if c.get("two_clocks"):
-            build_v2._qc_clocks(c["two_clocks"])
+            build_v3._qc_clocks(c["two_clocks"])
     except ValueError as e:
         issues.append(str(e))
     return sorted(set(issues))
@@ -558,14 +587,14 @@ def run(oid, compute_ctx):
             usage.append(u2)
             issues = auto_qc(content, chart)
 
-        import build_v2, check_render
+        import build_v3, check_render
         pdf = _path(oid, "pdf")
         try:
-            build_v2.generate(order, content, pdf)
+            build_v3.generate(order, content, pdf)
         except ValueError as e:                        # _qc_clocks failed after repair
             content["two_clocks"] = None
             issues.append(f"two_clocks dropped: {e}")
-            build_v2.generate(order, content, pdf)
+            build_v3.generate(order, content, pdf)
         over = check_render.check(pdf)
         if over:
             issues.append("overflow risk on pages " + ", ".join(str(p) for p, _ in over))
