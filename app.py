@@ -44,8 +44,42 @@ class GeocoderUnavailable(Exception):
     """The geocoder could not be reached or refused the request."""
 
 
-def geocode(city: str):
-    """Geocode a "City, Country" string. Returns (lat, lon, display_name).
+# Vietnamese buyers often give a province, not a city (26/09: "An Giang,
+# Vietnam" matched a hamlet called An Giang in Gia Lai, 500 km away). Map the
+# 63 pre-2025 provinces to their capital so the chart uses the right place.
+VN_PROVINCE_CAPITAL = {
+    "an giang": "Long Xuyen", "ba ria vung tau": "Vung Tau", "ba ria - vung tau": "Vung Tau", "bac giang": "Bac Giang",
+    "bac kan": "Bac Kan", "bac lieu": "Bac Lieu", "bac ninh": "Bac Ninh", "ben tre": "Ben Tre", "binh dinh": "Quy Nhon",
+    "binh duong": "Thu Dau Mot", "binh phuoc": "Dong Xoai", "binh thuan": "Phan Thiet", "ca mau": "Ca Mau",
+    "can tho": "Can Tho", "cao bang": "Cao Bang", "da nang": "Da Nang", "dak lak": "Buon Ma Thuot",
+    "dak nong": "Gia Nghia", "dien bien": "Dien Bien Phu", "dong nai": "Bien Hoa", "dong thap": "Cao Lanh",
+    "gia lai": "Pleiku", "ha giang": "Ha Giang", "ha nam": "Phu Ly", "ha noi": "Hanoi", "ha tinh": "Ha Tinh",
+    "hai duong": "Hai Duong", "hai phong": "Haiphong", "hau giang": "Vi Thanh", "hoa binh": "Hoa Binh",
+    "hung yen": "Hung Yen", "khanh hoa": "Nha Trang", "kien giang": "Rach Gia", "kon tum": "Kon Tum",
+    "lai chau": "Lai Chau", "lam dong": "Da Lat", "lang son": "Lang Son", "lao cai": "Lao Cai",
+    "long an": "Tan An", "nam dinh": "Nam Dinh", "nghe an": "Vinh", "ninh binh": "Ninh Binh",
+    "ninh thuan": "Phan Rang-Thap Cham", "phu tho": "Viet Tri", "phu yen": "Tuy Hoa", "quang binh": "Dong Hoi",
+    "quang nam": "Tam Ky", "quang ngai": "Quang Ngai", "quang ninh": "Ha Long", "quang tri": "Dong Ha",
+    "soc trang": "Soc Trang", "son la": "Son La", "tay ninh": "Tay Ninh", "thai binh": "Thai Binh",
+    "thai nguyen": "Thai Nguyen", "thanh hoa": "Thanh Hoa", "thua thien hue": "Hue", "hue": "Hue",
+    "tien giang": "My Tho", "tra vinh": "Tra Vinh", "tuyen quang": "Tuyen Quang", "vinh long": "Vinh Long",
+    "vinh phuc": "Vinh Yen", "yen bai": "Yen Bai", "sai gon": "Ho Chi Minh City", "saigon": "Ho Chi Minh City",
+    "tp hcm": "Ho Chi Minh City", "tphcm": "Ho Chi Minh City", "hcm": "Ho Chi Minh City", "hcmc": "Ho Chi Minh City",
+}
+_RANK = {"PPLC": 4, "PPLA": 3, "PPLA2": 2, "PPLA3": 1}
+
+
+def _plain(s):
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s or "").replace("đ", "d").replace("Đ", "D")
+    s = s.encode("ascii", "ignore").decode().lower()
+    s = re.sub(r"^(tinh|thanh pho|tp\.?|province|city of)\s+", "", s.strip())
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 -]", " ", s)).strip()
+
+
+def geocode(city: str, detail: bool = False):
+    """Geocode a "City, Country" string. Returns (lat, lon, display_name), or
+    with detail=True also a confidence flag ("ok" or a warning string).
 
     Uses Open-Meteo's geocoding API: free, no API key, and explicitly usable
     from a server. Nominatim was used before and silently failed for every
@@ -59,7 +93,13 @@ def geocode(city: str):
     # the name and keep the remaining segments to pick the right match.
     parts = [p.strip() for p in q.split(",") if p.strip()]
     name = parts[0]
-    hints = [p.lower() for p in parts[1:]]
+    hints = [_plain(p) for p in parts[1:]]
+    note = "ok"
+    vn = any(h in ("vietnam", "viet nam", "vn") for h in hints) or not hints
+    cap = VN_PROVINCE_CAPITAL.get(_plain(name)) if vn else None
+    if cap and _plain(cap) != _plain(name):
+        note = f"'{name}' read as {cap} (province or alias)"
+        name, hints = cap, ["vietnam"]
 
     try:
         r = requests.get(
@@ -76,19 +116,23 @@ def geocode(city: str):
     if not results:
         raise CityNotFound(q)
 
-    best = results[0]
-    if hints:
-        for item in results:
-            haystack = " ".join(
-                str(item.get(k, "")) for k in ("country", "country_code", "admin1", "admin2")
-            ).lower()
-            if any(h in haystack for h in hints):
-                best = item
-                break
+    def score(item):
+        hay = _plain(" ".join(str(item.get(k, "")) for k in ("country", "country_code", "admin1", "admin2")))
+        hit = sum(1 for h in hints if h and h in hay)
+        pop = item.get("population") or 0
+        return (hit, _RANK.get(item.get("feature_code"), 0) + (1 if pop > 5000 else 0), pop)
+
+    best = max(results, key=score)
+    if hints and score(best)[0] == 0:
+        note = f"no match for '{', '.join(parts[1:])}'; took the most prominent '{name}'"
+    elif not (best.get("population") or 0) and best.get("feature_code") == "PPL" and note == "ok":
+        note = f"matched a small locality ({best.get('admin1')}); check this is the right place"
 
     label = ", ".join(
         x for x in (best.get("name"), best.get("admin1"), best.get("country")) if x
     )
+    if detail:
+        return float(best["latitude"]), float(best["longitude"]), label, note
     return float(best["latitude"]), float(best["longitude"]), label
 
 
@@ -239,13 +283,15 @@ def portrait_request(req: PortraitReq, bg: BackgroundTasks, request: Request, k:
     if _limited(request.client.host if request.client else "?"):
         raise HTTPException(429, "Too many requests right now. Please try again later.")
     try:
-        lat, lon, place = geocode(req.city)
+        lat, lon, place, geo_note = geocode(req.city, detail=True)
     except CityNotFound:
         raise HTTPException(400, "We could not find that birth city. Try \"City, Country\", for example \"Lyon, France\".")
     except GeocoderUnavailable:
         raise HTTPException(503, "The location service is temporarily unavailable. Please try again in a moment.")
     tz = tz_offset(lat, lon, datetime(d.year, d.month, d.day, t.hour, t.minute))
     data = req.model_dump(exclude={"website", "source", "order_ref"})
+    if geo_note != "ok":
+        data["_flags"] = [f"birth place: {geo_note} -> {place}"]
     data.update(name=req.name.strip()[:80], email=req.email.strip(),
                 life_events=(req.life_events or "")[:1500],
                 _lat=lat, _lon=lon, _place=place, _tz=tz)
@@ -256,7 +302,25 @@ def portrait_request(req: PortraitReq, bg: BackgroundTasks, request: Request, k:
             data["_sale_id"] = _re.sub(r"[^A-Za-z0-9#_-]", "", req.order_ref)[:40]
     oid = portrait.new_order(data)
     bg.add_task(portrait.run, oid, _compute_ctx)
-    return {"ok": True, "place": place, "id": oid}
+    return {"ok": True, "place": place, "id": oid, "place_note": geo_note}
+
+
+@app.get("/geocode")
+def geocode_preview(city: str, request: Request):
+    """Read-only place check for the ops page: what would this city resolve to?"""
+    ip = request.client.host if request.client else "?"
+    now = _time.time()
+    hits = [t for t in _HITS.get("geo:" + ip, []) if now - t < 60]
+    if len(hits) >= 20:
+        raise HTTPException(429, "slow down")
+    _HITS["geo:" + ip] = hits + [now]
+    try:
+        lat, lon, place, note = geocode(city, detail=True)
+    except CityNotFound:
+        raise HTTPException(404, "not found")
+    except GeocoderUnavailable:
+        raise HTTPException(503, "geocoder unavailable")
+    return {"place": place, "lat": round(lat, 3), "lon": round(lon, 3), "note": note}
 
 
 # ================================================================ Gumroad Ping
@@ -465,7 +529,9 @@ async def gumroad_ping(request: Request, bg: BackgroundTasks, k: str = "", run: 
         sx = (sv or "").strip().lower()
         sex = "female" if sx.startswith(("f", "w", "nữ", "nu ")) or sx == "nu" else ("male" if sx.startswith(("m", "nam")) else None)
         try:
-            lat, lon, place = geocode(cv)
+            lat, lon, place, geo_note = geocode(cv, detail=True)
+            if geo_note != "ok":
+                flags.append(f"birth place: {geo_note} -> {place}")
         except CityNotFound:
             raise ValueError(f"birth city '{cv}' not found by the geocoder")
         except GeocoderUnavailable:
