@@ -225,9 +225,8 @@ def first_name(full):
         return "there"
     import unicodedata
     plain = unicodedata.normalize("NFKD", parts[0]).encode("ascii", "ignore").decode().lower()
-    if len(parts) >= 3 and plain in _SURNAME_FIRST:
-        return parts[-1]
-    return parts[0]
+    pick = parts[-1] if (len(parts) >= 3 and plain in _SURNAME_FIRST) else parts[0]
+    return pick.capitalize() if pick.isupper() else pick   # "NGHỊ" -> "Nghị"
 
 
 def tidy_place(place):
