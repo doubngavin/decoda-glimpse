@@ -51,6 +51,10 @@ HARD RULES
 10. ASPECTS: say two points are conjunct, opposite, square, trine or sextile ONLY if that pair is listed in astro.aspects. Never use "opposite" loosely for signs that are merely different. Signs next to each other are not opposite.
 11. BAZI BRANCH RELATIONS: call two branches a clash, harmony, harm, punishment or triad ONLY if that relation is listed in bazi.branch_relations. If a pair is not listed, do not name a relation for it.
 12. The reader's first name is meta.first_name. Use it exactly; never use another part of the name.
+13. SPEAK TO THE READER, NOT ABOUT THE DATA: never write "listed", "named as", "in the data", "the JSON", "computed" or field names. Say "Your Sun squares your Moon", not "this is listed as a square".
+14. NUMBERS: no decimals and no orbs in body text. Ages are whole years ("from about 21 to 31"). The mech line uses plain factor names ("Venus square MC"), never raw keys, underscores or decimals.
+15. WESTERN LENS COVERAGE: lens_astro must name and interpret the Sun, the Moon and the Rising sign (how people first meet the reader), before any aspect. Pick the two or three aspects that matter most; do not catalogue every aspect.
+16. BAZI COUNT: the element counts are out of 8 (four stems, four branches). Never say "of five".
 
 WORD BUDGET (body words): core_body 400-550, each lens 450-600, convergence 300-400, divergence 450-600, shadow 400-550, strengths 250-350, connect + work 500-650 together, protocols 350-450 (4-6 rules, at least 2 crossing systems), closing 40-80.
 
@@ -322,13 +326,40 @@ def auto_qc(c, chart):
     verbs = {"conjunct": "conjunct", "conjunction": "conjunct", "opposite": "opposite", "opposes": "opposite",
              "opposition": "opposite", "square": "square", "squares": "square", "trine": "trine",
              "trines": "trine", "sextile": "sextile"}
+    # Tight pattern only: "<A> [up to 3 plain words] <verb> [up to 3 plain words] <B>",
+    # no punctuation in between, so "Mercury · Virgo Sun square Gemini Moon" checks
+    # Sun-Moon, and "(Uranus trine) and to depth (Pluto sextile)" checks nothing.
+    gap = r"(?:\s+[A-Za-z']+){0,3}?\s+"
+    tight = re.compile(r"\b(" + pts + r")\b" + gap + r"(" + "|".join(verbs) + r")\b" + gap + r"(" + pts + r")\b")
     for sent in re.split(r"(?<=[.!?])\s+", txt):
-        m = re.search(r"\b(" + pts + r")\b[^.]{0,60}?\b(" + "|".join(verbs) + r")\b[^.]{0,60}?\b(" + pts + r")\b", sent)
-        if m:
+        for m in tight.finditer(sent):
             a, v, b = alias.get(m.group(1), m.group(1)), verbs[m.group(2)], alias.get(m.group(3), m.group(3))
+            if re.search(r"\b(" + pts + r")\b", m.group(0)[len(m.group(1)):m.start(2) - m.start(0)]):
+                continue   # another point sits between A and the verb; the nearer one is the subject
             if a != b and asp.get(frozenset((a, b))) != v:
                 real = asp.get(frozenset((a, b)))
                 issues.append(f"says {a} {v} {b}, but " + (f"the computed aspect is {real}" if real else "there is no such aspect in this chart") + "; remove or correct it")
+    # voice: the model must not narrate its data source or leak raw keys
+    bodies = []
+    for k in LIST_KEYS + ["convergence", "divergence", "shadow", "two_clocks"]:
+        v = c.get(k)
+        items = v if isinstance(v, list) else (v or {}).get("items", []) if isinstance(v, dict) else []
+        for b in items:
+            if isinstance(b, dict):
+                bodies.append((k, b.get("body", ""), b.get("mech", "")))
+    for k, body, mech in bodies:
+        if re.search(r"\b(listed|named as|as named|the JSON|aspect data|branch_relations|computed aspect)\b", body, re.I):
+            issues.append(f"{k}: talks about the data ('listed', 'named as' ...); say it to the reader directly")
+        if re.search(r"\d+\.\d+", body):
+            issues.append(f"{k}: decimals in body text; use whole numbers and no orbs")
+        if "_" in body or "_" in mech:
+            issues.append(f"{k}: raw field name with underscore in text; use plain words")
+    rising = astro.get("rising")
+    lens = " ".join(b.get("body", "") + " " + b.get("title", "") for b in (c.get("lens_astro") or []) if isinstance(b, dict))
+    if rising and not re.search(r"\b" + rising + r"\b[^.]{0,40}\b(rising|ascendant)\b|\b(rising|ascendant)\b[^.]{0,40}\b" + rising + r"\b", lens, re.I):
+        issues.append(f"lens_astro never interprets the {rising} Rising sign; cover Sun, Moon and Rising")
+    if re.search(r"\bof (five|5) (slots|elements|positions)\b", txt):
+        issues.append("element counts are out of 8, not 5")
     # BaZi: a named clash must be a real clash
     animals = "Rat|Ox|Tiger|Rabbit|Dragon|Snake|Horse|Goat|Monkey|Rooster|Dog|Pig"
     chong = {frozenset((_ANIMAL[x], _ANIMAL[y])) for x, y in _CHONG}
@@ -519,7 +550,9 @@ def run(oid, compute_ctx):
         content = normalize(fix_dashes(content))
         issues = auto_qc(content, chart)
         usage = [u1]
-        if issues:
+        for _round in range(2):                       # up to two repair rounds
+            if not issues:
+                break
             content, raw, u2 = repair(msgs, raw, issues)
             content = normalize(fix_dashes(content))
             usage.append(u2)
