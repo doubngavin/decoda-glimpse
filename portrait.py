@@ -48,6 +48,9 @@ HARD RULES
 7. If birth_time_confidence is not "exact": fill trust_block, naming rising, the Human Design chart and the hour pillar as less reliable. Otherwise trust_block is null.
 8. The shadow is the dark side of the reader's own strengths, written to be seen, never to frighten.
 9. No clinical diagnosis. No medical, legal or financial advice.
+10. ASPECTS: say two points are conjunct, opposite, square, trine or sextile ONLY if that pair is listed in astro.aspects. Never use "opposite" loosely for signs that are merely different. Signs next to each other are not opposite.
+11. BAZI BRANCH RELATIONS: call two branches a clash, harmony, harm, punishment or triad ONLY if that relation is listed in bazi.branch_relations. If a pair is not listed, do not name a relation for it.
+12. The reader's first name is meta.first_name. Use it exactly; never use another part of the name.
 
 WORD BUDGET (body words): core_body 400-550, each lens 450-600, convergence 300-400, divergence 450-600, shadow 400-550, strengths 250-350, connect + work 500-650 together, protocols 350-450 (4-6 rules, at least 2 crossing systems), closing 40-80.
 
@@ -158,9 +161,93 @@ def _parse(text, usage=None):
                                f"len={len(t)}; head={t[:200]!r}; tail={t[-200:]!r}")
 
 
+# ---------------------------------------------------------------- computed relations
+# The model must not work these out itself (26/09: it called Snake-Monkey a
+# "clash" (it is a six harmony) and Saturn "conjunct" an MC 23 degrees away).
+
+_ASPECTS = [(0, "conjunct", 8), (60, "sextile", 5), (90, "square", 7), (120, "trine", 7), (180, "opposite", 8)]
+_ASP_POINTS = ["Sun", "Moon", "Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Pluto", "Rising", "MC"]
+
+
+def aspects(astro):
+    lon = astro.get("lon") or {}
+    out = []
+    pts = [p for p in _ASP_POINTS if p in lon]
+    for i, a in enumerate(pts):
+        for b in pts[i + 1:]:
+            d = abs(lon[a] - lon[b]) % 360
+            d = min(d, 360 - d)
+            for ang, name, orb in _ASPECTS:
+                o = orb - 2 if ("Rising" in (a, b) or "MC" in (a, b)) else orb
+                if abs(d - ang) <= o:
+                    out.append({"a": a, "b": b, "aspect": name, "orb": round(abs(d - ang), 1)})
+    return out
+
+
+_ZHI = ["Zi", "Chou", "Yin", "Mao", "Chen", "Si", "Wu", "Wei", "Shen", "You", "Xu", "Hai"]
+_ANIMAL = ["Rat", "Ox", "Tiger", "Rabbit", "Dragon", "Snake", "Horse", "Goat", "Monkey", "Rooster", "Dog", "Pig"]
+_LIUHE = [(0, 1), (2, 11), (3, 10), (4, 9), (5, 8), (6, 7)]
+_CHONG = [(0, 6), (1, 7), (2, 8), (3, 9), (4, 10), (5, 11)]
+_HAI = [(0, 7), (1, 6), (2, 5), (3, 4), (8, 11), (9, 10)]
+_SANHE = [({8, 0, 4}, "Water"), ({11, 3, 7}, "Wood"), ({2, 6, 10}, "Fire"), ({5, 9, 1}, "Metal")]
+_XING = [({2, 5, 8}, "ungrateful punishment"), ({1, 10, 7}, "bullying punishment"), ({0, 3}, "uncivil punishment")]
+
+
+def branch_relations(bazi):
+    pil = bazi.get("pillars") or {}
+    idx = {k: _ZHI.index(v["zhi"]) for k, v in pil.items() if v.get("zhi") in _ZHI}
+    keys = [k for k in ("year", "month", "day", "hour") if k in idx]
+    out = []
+    for i, a in enumerate(keys):
+        for b in keys[i + 1:]:
+            x, y = idx[a], idx[b]
+            pair = tuple(sorted((x, y)))
+            label = f"{a} {_ZHI[x]} ({_ANIMAL[x]}) and {b} {_ZHI[y]} ({_ANIMAL[y]})"
+            if pair in _LIUHE: out.append(label + ": six harmony")
+            if pair in _CHONG: out.append(label + ": clash")
+            if pair in _HAI: out.append(label + ": harm")
+            for g, el in _SANHE:
+                if x in g and y in g and x != y: out.append(label + f": half {el} triad")
+            for g, name in _XING:
+                if x in g and y in g and x != y: out.append(label + f": {name} (partial)")
+            if x == y and x in (4, 6, 9, 11): out.append(label + ": self punishment")
+    return out
+
+
+_SURNAME_FIRST = {"nguyen", "tran", "le", "pham", "hoang", "huynh", "phan", "vu", "vo", "dang", "bui", "do",
+                  "ho", "ngo", "duong", "ly", "trinh", "dinh", "mai", "truong", "lam", "luong", "ta", "cao"}
+
+
+def first_name(full):
+    """Vietnamese names put the family name first: 'Nguyen Huu Nghi' -> 'Nghi'."""
+    parts = [p for p in (full or "").strip().split() if p]
+    if not parts:
+        return "there"
+    import unicodedata
+    plain = unicodedata.normalize("NFKD", parts[0]).encode("ascii", "ignore").decode().lower()
+    if len(parts) >= 3 and plain in _SURNAME_FIRST:
+        return parts[-1]
+    return parts[0]
+
+
+def tidy_place(place):
+    """'Ho Chi Minh City, Ho Chi Minh City (HCMC), Vietnam' -> 'Ho Chi Minh City, Vietnam'."""
+    segs, seen = [], set()
+    for s in (place or "").split(","):
+        s = re.sub(r"\s*\([^)]*\)", "", s).strip()
+        k = s.lower()
+        if s and k not in seen:
+            segs.append(s); seen.add(k)
+    if len(segs) > 3:
+        segs = [segs[0], segs[-1]]
+    return ", ".join(segs) or place
+
+
 def _chart_payload(chart, tl, order):
     c = {k: chart[k] for k in ("astro", "bazi", "hd") if k in chart}
-    c["meta"] = {"first_name": order["name"].split()[0], "birth_time_confidence": order.get("birth_time_confidence", "exact")}
+    c["astro"] = dict(c["astro"], aspects=aspects(c["astro"]))
+    c["bazi"] = dict(c["bazi"], branch_relations=branch_relations(c["bazi"]))
+    c["meta"] = {"first_name": first_name(order["name"]), "birth_time_confidence": order.get("birth_time_confidence", "exact")}
     if tl:
         c["timeline"] = {
             "age_now": tl["age"],
@@ -229,6 +316,30 @@ def auto_qc(c, chart):
         real = astro.get(body.lower())
         if real and real != sign:
             issues.append(f"'{body} in {sign}' is not in this chart ({body} is in {real})")
+    # aspects: every named aspect between two points must be a computed one
+    asp = {frozenset((x["a"], x["b"])): x["aspect"] for x in aspects(astro)}
+    alias = {"Midheaven": "MC", "Ascendant": "Rising", "ascendant": "Rising", "midheaven": "MC"}
+    pts = "Sun|Moon|Mercury|Venus|Mars|Jupiter|Saturn|Uranus|Neptune|Pluto|Rising|MC|Midheaven|Ascendant"
+    verbs = {"conjunct": "conjunct", "conjunction": "conjunct", "opposite": "opposite", "opposes": "opposite",
+             "opposition": "opposite", "square": "square", "squares": "square", "trine": "trine",
+             "trines": "trine", "sextile": "sextile"}
+    for sent in re.split(r"(?<=[.!?])\s+", txt):
+        m = re.search(r"\b(" + pts + r")\b[^.]{0,60}?\b(" + "|".join(verbs) + r")\b[^.]{0,60}?\b(" + pts + r")\b", sent)
+        if m:
+            a, v, b = alias.get(m.group(1), m.group(1)), verbs[m.group(2)], alias.get(m.group(3), m.group(3))
+            if a != b and asp.get(frozenset((a, b))) != v:
+                real = asp.get(frozenset((a, b)))
+                issues.append(f"says {a} {v} {b}, but " + (f"the computed aspect is {real}" if real else "there is no such aspect in this chart") + "; remove or correct it")
+    # BaZi: a named clash must be a real clash
+    animals = "Rat|Ox|Tiger|Rabbit|Dragon|Snake|Horse|Goat|Monkey|Rooster|Dog|Pig"
+    chong = {frozenset((_ANIMAL[x], _ANIMAL[y])) for x, y in _CHONG}
+    for sent in re.split(r"(?<=[.!?])\s+", txt):
+        if re.search(r"\bclash", sent, re.I):
+            found = re.findall(r"\b(" + animals + r")\b", sent)
+            if len(set(found)) >= 2:
+                pair = frozenset(found[:2])
+                if pair not in chong:
+                    issues.append(f"calls {' and '.join(sorted(pair))} a clash; per bazi.branch_relations it is not a clash. Use only listed relations")
     hd = chart["hd"]
     for t in ["Manifesting Generator", "Generator", "Projector", "Manifestor", "Reflector"]:
         if re.search(r"\b(you are|as) an? " + t + r"\b", txt) and t not in hd["type"]:
@@ -399,6 +510,7 @@ def run(oid, compute_ctx):
             tl = timeline.build(chart, date(y, mo, d), gender=sex)
         except Exception:
             tl = None
+        place = tidy_place(place)
         order = {"name": req["name"], "date": req["date"], "time": req["time"],
                  "tz": tz, "lat": req["_lat"], "lon": req["_lon"], "place": place,
                  "sex": sex, "life_events": (req.get("life_events") or "").strip(),
@@ -467,7 +579,7 @@ def approve(oid):
     if rec.get("status") != "review":
         return f"not ready (status {rec.get('status')})"
     req = rec["req"]
-    first = req["name"].split()[0]
+    first = first_name(req["name"])
     send_mail(req["email"], f"Your Decoda portrait, {first}", delivery_text(first),
               pdf_path=_path(oid, "pdf"), filename=f"Decoda - {req['name']}.pdf",
               reply_to=REVIEW_TO)

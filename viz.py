@@ -338,7 +338,7 @@ def life_arc(tl, width=1000, color="#F2EFE6", accent=ACCENT, bg="#0B0B0B",
             s.append(f'<rect x="{bx:.1f}" y="{y}" width="{max(bw - 2, 1):.1f}" '
                      f'height="26" fill="{accent if live else color}" '
                      f'opacity="{0.22 if live else 0.07}"/>')
-            name = f'{p["gan"]} {p["zhi"]}'
+            name = f'{p["gan"]} {p.get("animal") or p["zhi"]}'   # "Yin Fire Rooster", not "Yin Fire You"
             if bw > 58:
                 s.append(_txt(bx + 6, y + 17.2, name, FS_BAND,
                               accent if live else MUTED, anchor="start",
