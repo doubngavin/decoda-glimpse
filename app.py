@@ -189,6 +189,8 @@ class PortraitReq(BaseModel):
     sex: str | None = None
     life_events: str | None = None
     website: str | None = None        # honeypot: humans never fill it
+    source: str | None = None         # ops page: etsy / gumroad / gift / correction / other
+    order_ref: str | None = None      # ops page: Etsy or Gumroad order number
 
 
 _HITS: dict = {}
@@ -243,12 +245,15 @@ def portrait_request(req: PortraitReq, bg: BackgroundTasks, request: Request, k:
     except GeocoderUnavailable:
         raise HTTPException(503, "The location service is temporarily unavailable. Please try again in a moment.")
     tz = tz_offset(lat, lon, datetime(d.year, d.month, d.day, t.hour, t.minute))
-    data = req.model_dump(exclude={"website"})
+    data = req.model_dump(exclude={"website", "source", "order_ref"})
     data.update(name=req.name.strip()[:80], email=req.email.strip(),
                 life_events=(req.life_events or "")[:1500],
                 _lat=lat, _lon=lon, _place=place, _tz=tz)
     if _key_ok(k):
-        data["_source"] = "manual"
+        src = _re.sub(r"[^a-z]", "", (req.source or "").lower())[:20]
+        data["_source"] = "manual" + (":" + src if src else "")
+        if req.order_ref:
+            data["_sale_id"] = _re.sub(r"[^A-Za-z0-9#_-]", "", req.order_ref)[:40]
     oid = portrait.new_order(data)
     bg.add_task(portrait.run, oid, _compute_ctx)
     return {"ok": True, "place": place, "id": oid}
@@ -395,8 +400,7 @@ Sale: {f.get('sale_id')} · {f.get('price')} {f.get('currency')} · test={f.get(
 Custom fields as received:
 """ + "\n".join(f"  {k}: {v}" for k, v in fields.items()) + """
 
-To start it by hand once the details are clear, POST JSON to /portrait?k=<GUMROAD_KEY>
-with name, email, date (YYYY-MM-DD), time (HH:MM), city, sex, life_events."""
+Once the details are clear, start it by hand at https://trydecoda.com/ops"""
     try:
         portrait.send_mail(portrait.REVIEW_TO, subject, body, reply_to=f.get("email") or None)
     except Exception:
