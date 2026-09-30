@@ -26,6 +26,11 @@ AUTH = {
  "Sacral":"Your body knows yes or no faster than your head does. Trust the gut pull in the moment; let analysis check the decision, never make it.",
  "Emotional":"You have no truth in the now. Sleep on anything that matters; your clarity arrives only after the emotional wave has passed.",
  "Splenic":"Your knowing is a quiet, one-time instinct in the moment. It speaks softly and only once, so learn to catch it.",
+ "Ego Manifested":"Your decisions come through what you say you want. Say it out loud before you commit, and notice whether you truly want it.",
+ "Ego Projected":"Your decisions come through what you want and what you are willing to commit to. Talk it through with someone you trust and listen to yourself.",
+ "Self-Projected":"Your clarity comes from hearing yourself speak. Talk the choice through with people you trust, not for advice but to hear your own direction.",
+ "Mental":"Your clarity comes from the right environment and from talking things through with others, not from a single inner signal. Take your time.",
+ "Lunar":"Your clarity grows over time. Give big decisions about a full moon cycle and notice how they feel in different company.",
  "Other":"Your clearest decisions come from the right environment and unhurried time, not from pressure.",
 }
 OPEN = {

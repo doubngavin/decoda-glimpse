@@ -129,8 +129,9 @@ def personal_year(birth, year):
 def profection(chart, birth, year):
     """Annual profection, whole sign. Age 0 sits in the 1st house and it walks
     one house per birthday, so the cycle closes every 12 years."""
-    ref = date(year, birth.month, birth.day)
-    age = _age_on(birth, ref)
+    # Age reached at the birthday that falls in `year`. Computed without
+    # building date(year, 2, 29), which does not exist in common years.
+    age = year - birth.year
     house = (age % 12) + 1
     rising_idx = SIGNS.index(chart["astro"]["rising"])
     sign = SIGNS[(rising_idx + house - 1) % 12]

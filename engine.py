@@ -66,6 +66,76 @@ def _activations(jd):
     return out
 
 
+MOTORS = {"Sacral", "Heart", "SolarPlexus", "Root"}
+
+
+def design_jd(jd, sun=None):
+    """Julian day when the Sun was exactly 88 degrees before `sun`."""
+    if sun is None:
+        sun = swe.calc_ut(jd, swe.SUN)[0][0]
+    tgt = (sun - 88) % 360
+    lo, hi = jd - 100, jd - 80
+    for _ in range(60):
+        m = (lo + hi) / 2
+        s = swe.calc_ut(m, swe.SUN)[0][0]
+        diff = (s - tgt + 180) % 360 - 180
+        lo, hi = (lo, m) if diff > 0 else (m, hi)
+    return (lo + hi) / 2
+
+
+def _linked(ach):
+    """Adjacency between centers through defined channels."""
+    adj = {}
+    for a, b in ach:
+        x, y = CENTER[a], CENTER[b]
+        adj.setdefault(x, set()).add(y); adj.setdefault(y, set()).add(x)
+    return adj
+
+
+def _reach(adj, start):
+    seen, todo = {start}, [start]
+    while todo:
+        for n in adj.get(todo.pop(), ()):
+            if n not in seen:
+                seen.add(n); todo.append(n)
+    return seen
+
+
+def hd_type_authority(defined, ach):
+    """Type and inner authority from defined centers and channels.
+
+    Motor-to-Throat counts any path through defined channels (Heart-G-Throat
+    makes a Manifestor), not only a direct channel. Authority follows the
+    standard order: Solar Plexus, Sacral, Spleen, Heart (Ego), G to Throat
+    (Self-Projected), otherwise Mental (Projector with only Head/Ajna/Throat
+    defined) or Lunar (Reflector). Nothing is left as a guess."""
+    if not defined:
+        return "Reflector", "Lunar"
+    adj = _linked(ach)
+    throat_net = _reach(adj, "Throat") if "Throat" in defined else set()
+    m2t = bool(throat_net & MOTORS)
+    sacral = "Sacral" in defined
+    if sacral:
+        htype = "Manifesting Generator" if m2t else "Generator"
+    elif m2t:
+        htype = "Manifestor"
+    else:
+        htype = "Projector"
+    if "SolarPlexus" in defined:
+        auth = "Emotional"
+    elif sacral:
+        auth = "Sacral"
+    elif "Spleen" in defined:
+        auth = "Splenic"
+    elif "Heart" in defined:
+        auth = "Ego Manifested" if htype == "Manifestor" else "Ego Projected"
+    elif "G" in defined and "G" in throat_net:
+        auth = "Self-Projected"
+    else:
+        auth = "Mental"
+    return htype, auth
+
+
 def compute(year, month, day, hour, minute, lat, lon, tz):
     """tz = hours offset from UTC at birth (e.g. 7 for Vietnam)."""
     ut = datetime(year, month, day, hour, minute) - timedelta(hours=tz)
@@ -115,41 +185,18 @@ def compute(year, month, day, hour, minute, lat, lon, tz):
                         "day": _pillar(dp.tg, dp.dz), "hour": _pillar(ht, hz)}}
 
     # Human Design
-    tgt = (sun - 88) % 360
-    lo, hi = jd - 100, jd - 80
-    for _ in range(60):
-        m = (lo + hi) / 2
-        s = swe.calc_ut(m, swe.SUN)[0][0]
-        diff = (s - tgt + 180) % 360 - 180
-        lo, hi = (m, hi) if diff > 0 else (lo, m)
-    djd = (lo + hi) / 2
+    # Design = the moment the Sun stood exactly 88 degrees of arc before its
+    # birth position (a solar-arc rule, not 88 days; the answer lands ~87-92
+    # days earlier). The Sun only moves forward, so plain bisection works:
+    # if the Sun at m is already past the target, the root is earlier.
+    djd = design_jd(jd, sun)
     pers, des = _activations(jd), _activations(djd)
     active = set(v[0] for v in pers.values()) | set(v[0] for v in des.values())
     defined, ach = set(), []
     for a, b in CHANNELS:
         if a in active and b in active:
             ach.append((a, b)); defined.add(CENTER[a]); defined.add(CENTER[b])
-    sacral = "Sacral" in defined
-    throat = "Throat" in defined
-    motors = {"Sacral","Heart","SolarPlexus","Root"}
-    m2t = any((CENTER[a]=="Throat" and CENTER[b] in motors) or
-              (CENTER[b]=="Throat" and CENTER[a] in motors) for a, b in ach)
-    if not defined:
-        htype = "Reflector"
-    elif sacral:
-        htype = "Manifesting Generator" if m2t else "Generator"
-    elif throat and m2t:
-        htype = "Manifestor"
-    else:
-        htype = "Projector"
-    if "SolarPlexus" in defined:
-        authority = "Emotional"
-    elif sacral:
-        authority = "Sacral"
-    elif "Spleen" in defined:
-        authority = "Splenic"
-    else:
-        authority = "Other"
+    htype, authority = hd_type_authority(defined, ach)
     all_centers = {"Head","Ajna","Throat","G","Heart","Sacral","Spleen","SolarPlexus","Root"}
     hd = {"type": htype, "authority": authority,
           "profile": f"{pers['Sun'][1]}/{des['Sun'][1]}",
