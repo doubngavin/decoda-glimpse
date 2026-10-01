@@ -336,6 +336,8 @@ def auto_qc(c, chart):
             a, v, b = alias.get(m.group(1), m.group(1)), verbs[m.group(2)], alias.get(m.group(3), m.group(3))
             if re.search(r"\b(" + pts + r")\b", m.group(0)[len(m.group(1)):m.start(2) - m.start(0)]):
                 continue   # another point sits between A and the verb; the nearer one is the subject
+            if re.search(r"\b(" + "|".join(verbs) + r")\b", sent[m.end(2):m.start(3)]):
+                continue   # "Venus-Mars conjunct, opposite Uranus": the nearer verb governs B
             if a != b and asp.get(frozenset((a, b))) != v:
                 real = asp.get(frozenset((a, b)))
                 issues.append(f"says {a} {v} {b}, but " + (f"the computed aspect is {real}" if real else "there is no such aspect in this chart") + "; remove or correct it")
