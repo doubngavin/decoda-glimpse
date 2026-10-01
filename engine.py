@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Decoda compute engine: Western astrology + BaZi + Human Design.
-Deterministic. Verified against a known chart: 1996-09-05 14:45 UTC+7 Long Xuyen = Virgo/Gemini/Capricorn, Yi Wood Fire-dominant, MG 2/5 Sacral, channels 11-56/18-58/20-34/21-45."""
+Deterministic. Verified against Jovian Archive (01/10/2026): 1996-09-05 14:45 UTC+7 Long Xuyen = Generator 2/4 Sacral, channels 18-58/34-57, Design nodes 57.1/51.1. Human Design uses the TRUE lunar node, not the mean node."""
 import swisseph as swe
 import sxtwl
 from datetime import datetime, timedelta
@@ -36,7 +36,7 @@ CHANNELS = [(1,8),(2,14),(3,60),(4,63),(5,15),(6,59),(7,31),(9,52),(10,20),(10,3
     (24,61),(25,51),(26,44),(27,50),(28,38),(29,46),(30,41),(32,54),(34,57),(35,36),(37,40),
     (39,55),(42,53),(47,64)]
 
-_PL = {"Sun":swe.SUN,"Earth":"E","Moon":swe.MOON,"NorthNode":swe.MEAN_NODE,"SouthNode":"S",
+_PL = {"Sun":swe.SUN,"Earth":"E","Moon":swe.MOON,"NorthNode":swe.TRUE_NODE,"SouthNode":"S",
        "Mercury":swe.MERCURY,"Venus":swe.VENUS,"Mars":swe.MARS,"Jupiter":swe.JUPITER,
        "Saturn":swe.SATURN,"Uranus":swe.URANUS,"Neptune":swe.NEPTUNE,"Pluto":swe.PLUTO}
 
@@ -59,7 +59,7 @@ def _activations(jd):
         if p == "E":
             L = (swe.calc_ut(jd, swe.SUN)[0][0] + 180) % 360
         elif p == "S":
-            L = (swe.calc_ut(jd, swe.MEAN_NODE)[0][0] + 180) % 360
+            L = (swe.calc_ut(jd, swe.TRUE_NODE)[0][0] + 180) % 360
         else:
             L = swe.calc_ut(jd, p)[0][0]
         out[name] = _gate_line(L)

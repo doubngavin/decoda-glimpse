@@ -33,6 +33,9 @@ REF = [
     ((1948, 4, 9, 0, 14, 45.5, -73.57, -5), "Manifestor", "Splenic", "5/1", ("51", "57", "61", "62")),
     # Steve Jobs, 1955-02-24 19:15 San Francisco (PST): Generator 6/3 Emotional, cross 55/59 | 9/16
     ((1955, 2, 24, 19, 15, 37.77, -122.42, -8), "Generator", "Emotional", "6/3", ("55", "59", "9", "16")),
+    # 1996-09-05 14:45 Long Xuyen (UTC+7), checked on Jovian Archive 01/10/2026: Generator 2/4 Sacral,
+    # cross 64/63 | 35/5. Design nodes 57.1/51.1 only with the TRUE node (mean node gives 48/21 -> Manifestor).
+    ((1996, 9, 5, 14, 45, 10.386, 105.435, 7), "Generator", "Sacral", "2/4", ("64", "63", "35", "5")),
 ]
 for args, typ, auth, prof, cross in REF:
     h = engine.compute(*args)["hd"]
